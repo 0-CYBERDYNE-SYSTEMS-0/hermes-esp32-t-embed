@@ -65,10 +65,6 @@ void t_embed_gesture_update(t_embed_gesture_state_t *state, bool raw_down,
     if (!event->pressed_at_us) event->pressed_at_us = state->pressed_at_us;
 }
 
-void t_embed_gesture_suppress_until_release(t_embed_gesture_state_t *state) {
-    if (state && (state->raw_down || state->stable_down)) state->suppress_release = true;
-}
-
 unsigned t_embed_menu_move(unsigned selected, int detents, unsigned item_count) {
     if (!item_count) return 0;
     int64_t position = (int64_t)(selected % item_count) + detents;

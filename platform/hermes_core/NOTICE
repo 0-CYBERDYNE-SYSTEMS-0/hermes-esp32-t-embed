@@ -37,10 +37,5 @@ https://components.espressif.com/components/waveshare/esp32_s3_touch_amoled_1_75
 released by Waveshare under the Apache License 2.0. A copy of that license is in
 LICENSES/Apache-2.0.txt.
 
-T-Embed integration dependencies
-------------------------------
-This repository also includes Espressif ESP-DSP as the components/esp-dsp
-Git submodule, licensed under Apache License 2.0; its license is retained
-in components/esp-dsp/LICENSE after initializing the submodule.
 The upstream asset and board-port paths above describe the original Gadget
 SDK. This integration imports only the portable core listed in PROVENANCE.md.

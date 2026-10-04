@@ -36,7 +36,6 @@ void t_embed_gesture_update(t_embed_gesture_state_t *state, bool raw_down,
                             int detents, int64_t now_us, uint32_t debounce_ms,
                             uint32_t hold_ms, uint8_t context,
                             t_embed_gesture_event_t *event);
-void t_embed_gesture_suppress_until_release(t_embed_gesture_state_t *state);
 unsigned t_embed_menu_move(unsigned selected, int detents, unsigned item_count);
 
 #ifdef __cplusplus

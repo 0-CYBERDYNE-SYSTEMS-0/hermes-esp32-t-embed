@@ -1,6 +1,6 @@
 # T-Embed Hermes setup
 
-This guide is for the standard T-Embed ESP32-S3R8 running the three-app launcher. The Hermes app uses the board's native USB Serial/JTAG connection for setup and diagnostics. This repository currently provides source-build instructions; it does not publish a firmware release image.
+This guide is for the standard T-Embed ESP32-S3R8 running the Hermes-only launcher. The Hermes app uses the board's native USB Serial/JTAG connection for setup and diagnostics. The repository provides source-build instructions and CI build artifacts; it does not publish a prebuilt firmware release image.
 
 ## Set up the Hermes Gadget gateway
 
@@ -24,7 +24,7 @@ ls /dev/cu.usbmodem*
 screen /dev/cu.usbmodemXXXX 115200
 ```
 
-Replace `XXXX` with the port shown on your Mac. At the launcher, rotate to **Hermes** and click the knob. Send one command per line; each line must end with Enter/newline. `HELP` prints the command list.
+Replace `XXXX` with the port shown on your Mac. At the one-entry launcher, click **Hermes**. Send one command per line; each line must end with Enter/newline. `HELP` prints the command list.
 
 The serial console does not echo typed characters, so the line may look blank while you type. Press Enter and wait for the board's reply. This ESP32-S3 uses 2.4 GHz Wi-Fi; use a 2.4 GHz SSID and make sure the board and gateway can communicate on the same LAN.
 
@@ -84,7 +84,7 @@ The Hermes speaker output is I2S for a MAX98357A amplifier: T-Embed GPIO7 is BCL
 
 ## Knob controls
 
-- In the launcher, rotate to Hermes and click to open it.
+- In the one-entry launcher, click Hermes to open it.
 - In Hermes Ready or while viewing a reply, hold the knob for about 300 ms to start push-to-talk. Wait for **Listening**, speak, then release to send.
 - While Thinking or Speaking, a hold cancels the active turn and begins a new recording. A short click opens the action menu.
 - While Listening, turn the knob to cancel/discard the recording; the release is consumed and does not send it.
@@ -94,7 +94,7 @@ The Hermes speaker output is I2S for a MAX98357A amplifier: T-Embed GPIO7 is BCL
 
 ## Build and validation
 
-From the repository root, source `export.sh` from an ESP-IDF checkout at the T-Embed profile's pinned revision (`25fe69f946311abdaf9ad56591f25fedbc20ac98`). The build helper checks that `IDF_PATH` points to this exact commit, then builds and exports the T-Embed profile:
+From the repository root, source `export.sh` from an ESP-IDF checkout at the T-Embed profile's pinned revision (`25fe69f946311abdaf9ad56591f25fedbc20ac98`). The build helper checks that `IDF_PATH` points to this exact commit, then builds and exports the standalone Hermes application:
 
 ```sh
 git clone https://github.com/espressif/esp-idf.git ../esp-idf-hermes-t-embed
@@ -105,12 +105,12 @@ source ../esp-idf-hermes-t-embed/export.sh
 python3 tools/build_firmware.py --profile t-embed --version local --output artifacts
 ```
 
-The output profile directory (`artifacts/t-embed`) must not already exist; choose a fresh `--output` directory if needed. Inspect the generated combined map and image/partition sizes before flashing. To flash the just-built profile, substitute the T-Embed's serial port:
+The output profile directory (`artifacts/t-embed`) must not already exist; choose a fresh `--output` directory if needed. It contains `bootloader.bin`, `partition-table.bin`, `hermes_t_embed.bin`, and `manifest.json`. Review the generated map, manifest offsets, and image/partition sizes before flashing. Make and verify a fresh full-flash backup before any device write. To flash the just-built profile, substitute the T-Embed's serial port:
 
 ```sh
-IDF_COMPONENT_MANAGER=1 python3 "$IDF_PATH/tools/idf.py" \
+python3 "$IDF_PATH/tools/idf.py" \
   -C "$PWD" -B "$PWD/build-t-embed" \
   -p /dev/cu.usbmodemXXXX flash
 ```
 
-Hardware validation confirmed Wi-Fi connection, gateway pairing, and a fast voice conversation on the board. Prompt handling and repeated app transitions have not been comprehensively tested; a successful compile alone does not verify those behaviors.
+This command flashes the current build without requesting a full erase. Standalone-package hardware verification is pending. Wi-Fi connection, gateway pairing, and a voice interaction were confirmed on one board before repository pruning; prompt approval, repeated Home/restart cycles, reconnect stress, and sustained audio under network congestion have not been comprehensively validated. A successful compile alone does not verify those behaviors.
