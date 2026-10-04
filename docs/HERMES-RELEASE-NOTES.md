@@ -4,7 +4,7 @@
 
 On one standard LILYGO T-Embed ESP32-S3R8 with an attached speaker, the firmware connected to 2.4 GHz Wi-Fi, connected to the Gadget gateway, and completed pairing. The user confirmed a voice interaction worked and that a subsequent request responded immediately. No quantitative warm-latency benchmark or exhaustive hardware validation was performed.
 
-The T-Embed build uses the ESP-IDF revision in `firmware-targets.json`. Wi-Fi/LwIP allocations and ordinary WebSocket buffers can use PSRAM; internal memory is reserved for task stacks and DMA. These settings resolved the observed Wi-Fi association and WebSocket client-init failures. Other inherited SDR profiles have not been rebuilt for this Hermes publication and are outside its supported hardware scope.
+The T-Embed build uses the ESP-IDF revision in `firmware-targets.json`. Wi-Fi/LwIP allocations and ordinary WebSocket buffers can use PSRAM; internal memory is reserved for task stacks and DMA. These settings resolved the observed Wi-Fi association and WebSocket client-init failures. The publication CI built all nine catalog profiles successfully, including T-Embed. Physical validation remains limited to the T-Embed observations above; the other profiles retain their upstream scope.
 
 ## Known limitations
 
@@ -17,3 +17,7 @@ The T-Embed build uses the ESP-IDF revision in `firmware-targets.json`. Wi-Fi/Lw
 ## Distribution
 
 Only source and build instructions are published. Device flash/NVS backups, credentials, generated configurations, and local build artifacts are excluded. Build this repository's `t-embed` profile; upstream browser flashers do not distribute this Hermes integration.
+
+## Publication checks
+
+The [publication workflow](https://github.com/0-CYBERDYNE-SYSTEMS-0/hermes-esp32-t-embed/actions/runs/37242576937) passed the existing host checks and built all nine firmware profiles from source commit `7440892`. The subsequent documentation-only commit records those results. The public history starts from a sanitized source snapshot; local working history and device backups were not uploaded.
