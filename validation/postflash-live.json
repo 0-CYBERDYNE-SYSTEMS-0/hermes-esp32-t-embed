@@ -1,0 +1,365 @@
+[
+  {
+    "elapsed_s": 0.104,
+    "command": "INFO",
+    "reply": "S3SDR 6 burst 16380"
+  },
+  {
+    "elapsed_s": 0.21,
+    "command": "CAPS",
+    "reply": "CAPS UARTBAUD RXLIMITS SERIALLEASE DUALSERIAL TUNEEXT RX40 RX16 LPFANA GAIN HWAGC IQ8 RING SPEC SPECN SPECCAPS SPECSTAT DCT"
+  },
+  {
+    "elapsed_s": 0.314,
+    "command": "LIMITS?",
+    "reply": "LIMITS {\"gain\":[0,82,1],\"bandwidth\":[13,69,1,0],\"rates\":[80000000,40000000,16000000],\"bits\":[8,10]}"
+  },
+  {
+    "elapsed_s": 0.418,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 1 1024 32 4448 16174 0 123 7f6dcb2d 0 85232 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 1,
+      "nfft": 1024,
+      "screen_frames": 32,
+      "rf_frames": 4448,
+      "ffts": 16174,
+      "bin_min": 0,
+      "bin_max": 123,
+      "checksum": 2137901869,
+      "frame_age_ms": 0,
+      "capture_us": 85232,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 0.523,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 6.633,
+    "command": "UI?",
+    "reply": "UI 1 1 2437 40 5 1024 67 9313 33879 0 104 72e9f384 2387 85233 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 1,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 67,
+      "rf_frames": 9313,
+      "ffts": 33879,
+      "bin_min": 0,
+      "bin_max": 104,
+      "checksum": 1927934852,
+      "frame_age_ms": 2387,
+      "capture_us": 85233,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 6.737,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 12.845,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 124 17236 62698 0 99 2cae81c4 0 85230 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 124,
+      "rf_frames": 17236,
+      "ffts": 62698,
+      "bin_min": 0,
+      "bin_max": 99,
+      "checksum": 749633988,
+      "frame_age_ms": 0,
+      "capture_us": 85230,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 12.946,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 19.051,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 181 25159 91528 0 97 72c307ed 0 85231 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 181,
+      "rf_frames": 25159,
+      "ffts": 91528,
+      "bin_min": 0,
+      "bin_max": 97,
+      "checksum": 1925384173,
+      "frame_age_ms": 0,
+      "capture_us": 85231,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 19.155,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 25.262,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 238 33082 120361 0 144 98538cb9 0 85229 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 238,
+      "rf_frames": 33082,
+      "ffts": 120361,
+      "bin_min": 0,
+      "bin_max": 144,
+      "checksum": 2555612345,
+      "frame_age_ms": 0,
+      "capture_us": 85229,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 25.364,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 31.469,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 295 41005 149199 0 104 abc204a6 0 85236 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 295,
+      "rf_frames": 41005,
+      "ffts": 149199,
+      "bin_min": 0,
+      "bin_max": 104,
+      "checksum": 2881619110,
+      "frame_age_ms": 0,
+      "capture_us": 85236,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 31.574,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 37.677,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 352 48928 178031 0 99 43d264bb 0 85228 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 352,
+      "rf_frames": 48928,
+      "ffts": 178031,
+      "bin_min": 0,
+      "bin_max": 99,
+      "checksum": 1137861819,
+      "frame_age_ms": 0,
+      "capture_us": 85228,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 37.783,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 43.887,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 409 56851 206863 0 124 299091a3 0 85234 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 409,
+      "rf_frames": 56851,
+      "ffts": 206863,
+      "bin_min": 0,
+      "bin_max": 124,
+      "checksum": 697340323,
+      "frame_age_ms": 0,
+      "capture_us": 85234,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 43.99,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 50.093,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 467 64913 236186 0 104 44bce3eb 0 85234 18 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 467,
+      "rf_frames": 64913,
+      "ffts": 236186,
+      "bin_min": 0,
+      "bin_max": 104,
+      "checksum": 1153229803,
+      "frame_age_ms": 0,
+      "capture_us": 85234,
+      "late_max": 18,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 50.196,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 56.302,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 524 72836 265021 0 118 3003d604 0 85235 19 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 524,
+      "rf_frames": 72836,
+      "ffts": 265021,
+      "bin_min": 0,
+      "bin_max": 118,
+      "checksum": 805557764,
+      "frame_age_ms": 0,
+      "capture_us": 85235,
+      "late_max": 19,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 56.404,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 62.515,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 581 80759 293845 0 105 b8ba38c4 0 85229 19 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 581,
+      "rf_frames": 80759,
+      "ffts": 293845,
+      "bin_min": 0,
+      "bin_max": 105,
+      "checksum": 3099211972,
+      "frame_age_ms": 0,
+      "capture_us": 85229,
+      "late_max": 19,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 62.62,
+    "command": "RELEASE",
+    "reply": "OK"
+  },
+  {
+    "elapsed_s": 65.104,
+    "command": "UI?",
+    "reply": "UI 1 0 2437 40 5 1024 605 84095 305993 0 105 d215f5c0 0 85232 19 0 0",
+    "ui": {
+      "ready": 1,
+      "paused": 0,
+      "frequency_mhz": 2437,
+      "span_mhz": 40,
+      "step_mhz": 5,
+      "nfft": 1024,
+      "screen_frames": 605,
+      "rf_frames": 84095,
+      "ffts": 305993,
+      "bin_min": 0,
+      "bin_max": 105,
+      "checksum": 3524654528,
+      "frame_age_ms": 0,
+      "capture_us": 85232,
+      "late_max": 19,
+      "drops": 0,
+      "failures": 0
+    }
+  },
+  {
+    "elapsed_s": 65.209,
+    "command": "RELEASE",
+    "reply": "OK"
+  }
+]
