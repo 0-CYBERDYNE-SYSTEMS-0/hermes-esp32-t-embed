@@ -9,7 +9,7 @@ class ReceiveCommands(unittest.TestCase):
     @unittest.skipUnless(shutil.which('cc'), 'Host C compiler unavailable')
     def test_rx_commands_and_removed_transmit_commands(self):
         source=(Path(__file__).resolve().parents[1]/'main/targets/esp32s3/receiver.c').read_text()
-        handler=source[source.index('static void handle_command('):source.index('void app_main(')]
+        handler=source[source.index('static void handle_command('):source.index('#ifdef ESP_SDR_T_EMBED_APPS\nvoid t_embed_sdr_run(')]
         stub=r'''
 #include <assert.h>
 #include <stdbool.h>

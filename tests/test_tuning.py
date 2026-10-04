@@ -146,7 +146,9 @@ static unsigned phy_i2c_readReg(unsigned a,unsigned b,unsigned c){return 0;}
             with self.subTest(target=target):
                 source=(MAIN/'targets'/target/'receiver.c').read_text()
                 name='command' if target=='esp32s31' else 'handle_command'
-                handler=source[source.index('static void '+name+'('):source.index('void app_main(')]
+                end = ('#ifdef ESP_SDR_T_EMBED_APPS\nvoid t_embed_sdr_run('
+                       if target == 'esp32s3' else 'void app_main(')
+                handler=source[source.index('static void '+name+'('):source.index(end)]
                 self.compile_run(f'#define CONFIG_IDF_TARGET_{target.upper()} 1\n'+stub+handler+r'''
 static void send(const char *s){char line[128];snprintf(line,sizeof(line),"%s",s);HANDLER(line);}
 int main(void){
