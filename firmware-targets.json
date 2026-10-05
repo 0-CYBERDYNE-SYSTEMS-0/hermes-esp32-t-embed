@@ -2,16 +2,83 @@
   "schema_version": 1,
   "profiles": [
     {
+      "id": "esp32",
+      "target": "esp32",
+      "label": "ESP32 (2 MB or larger, UART)",
+      "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "allow_larger_flash": true,
+      "preview": false
+    },
+    {
+      "id": "esp32c3",
+      "target": "esp32c3",
+      "label": "ESP32-C3 (2 MB or larger)",
+      "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "allow_larger_flash": true,
+      "preview": false
+    },
+    {
+      "id": "esp32c5",
+      "target": "esp32c5",
+      "label": "ESP32-C5 (2 MB or larger)",
+      "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "allow_larger_flash": true,
+      "preview": false
+    },
+    {
+      "id": "esp32c61",
+      "target": "esp32c61",
+      "label": "ESP32-C61 (2 MB or larger)",
+      "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "allow_larger_flash": true,
+      "preview": false
+    },
+    {
+      "id": "esp32s3",
+      "target": "esp32s3",
+      "label": "ESP32-S3 (2 MB or larger)",
+      "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "allow_larger_flash": true,
+      "preview": false
+    },
+    {
       "id": "t-embed",
       "target": "esp32s3",
-      "label": "Hermes for LILYGO T-Embed ESP32-S3R8",
+      "label": "LILYGO T-Embed ESP32-S3R8 (16 MB flash, app launcher)",
       "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
       "allow_larger_flash": true,
       "preview": false,
       "component_manager": true,
+      "t_embed_apps": true,
       "sdkconfig_defaults": [
-        "sdkconfig.defaults"
+        "sdkconfig.defaults",
+        "sdkconfig.defaults.esp32s3",
+        "sdkconfig.defaults.t-embed"
       ]
+    },
+    {
+      "id": "esp32s31",
+      "target": "esp32s31",
+      "label": "ESP32-S31 (2 MB or larger)",
+      "idf_ref": "26dd2948925d44f41e3bb614fb044b7a0839a242",
+      "allow_larger_flash": true,
+      "preview": true
+    },
+    {
+      "id": "esp32c6",
+      "target": "esp32c6",
+      "label": "ESP32-C6 (2 MB or larger)",
+      "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "allow_larger_flash": true,
+      "preview": false
+    },
+    {
+      "id": "esp32s2",
+      "target": "esp32s2",
+      "label": "ESP32-S2 (4 MB or larger)",
+      "idf_ref": "25fe69f946311abdaf9ad56591f25fedbc20ac98",
+      "allow_larger_flash": true,
+      "preview": false
     }
   ],
   "unavailable": {}

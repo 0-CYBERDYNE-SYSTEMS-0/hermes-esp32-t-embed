@@ -1,6 +1,6 @@
 # T-Embed Hermes setup
 
-This guide is for the standard T-Embed ESP32-S3R8 running the Hermes-only launcher. The Hermes app uses the board's native USB Serial/JTAG connection for setup and diagnostics. The repository provides source-build instructions and CI build artifacts; it does not publish a prebuilt firmware release image.
+This guide is for the standard T-Embed ESP32-S3R8 running the three-app launcher. The Hermes app uses the board's native USB Serial/JTAG connection for setup and diagnostics. This repository currently provides source-build instructions; it does not publish a firmware release image.
 
 ## Set up the Hermes Gadget gateway
 
@@ -24,7 +24,7 @@ ls /dev/cu.usbmodem*
 screen /dev/cu.usbmodemXXXX 115200
 ```
 
-Replace `XXXX` with the port shown on your Mac. At the one-entry launcher, click **Hermes**. Send one command per line; each line must end with Enter/newline. `HELP` prints the command list.
+Replace `XXXX` with the port shown on your Mac. At the launcher, rotate to **Hermes** and click the knob. Send one command per line; each line must end with Enter/newline. `HELP` prints the command list.
 
 The serial console does not echo typed characters, so the line may look blank while you type. Press Enter and wait for the board's reply. This ESP32-S3 uses 2.4 GHz Wi-Fi; use a 2.4 GHz SSID and make sure the board and gateway can communicate on the same LAN.
 
@@ -46,8 +46,6 @@ attempts, with increasing retry delays. It stays on a working network until disc
 it does not interrupt a working hotspot connection to search for home Wi-Fi. With no
 fallback configured, it continues retrying the primary network. On an iPhone, enable
 **Allow Others to Join** and **Maximize Compatibility** under Personal Hotspot.
-Use the exact broadcast SSID, including punctuation: straight (`'`) and curly
-(`’`) apostrophes are different bytes and do not match during Wi-Fi discovery.
 
 To choose a network directly, click the knob and open **Wi-Fi Network**. Select
 **Phone Hotspot**, **Home Wi-Fi**, or **Auto (Home First)**. Manual selection retries
@@ -132,7 +130,7 @@ Voice replies default to On when no preference has been saved. If the preference
 
 ## Build and validation
 
-From the repository root, source `export.sh` from an ESP-IDF checkout at the T-Embed profile's pinned revision (`25fe69f946311abdaf9ad56591f25fedbc20ac98`). The build helper checks that `IDF_PATH` points to this exact commit, then builds and exports the standalone Hermes application:
+From the repository root, source `export.sh` from an ESP-IDF checkout at the T-Embed profile's pinned revision (`25fe69f946311abdaf9ad56591f25fedbc20ac98`). The build helper checks that `IDF_PATH` points to this exact commit, then builds and exports the T-Embed profile:
 
 ```sh
 git clone https://github.com/espressif/esp-idf.git ../esp-idf-hermes-t-embed
@@ -143,12 +141,12 @@ source ../esp-idf-hermes-t-embed/export.sh
 python3 tools/build_firmware.py --profile t-embed --version local --output artifacts
 ```
 
-The output profile directory (`artifacts/t-embed`) must not already exist; choose a fresh `--output` directory if needed. It contains `bootloader.bin`, `partition-table.bin`, `hermes_t_embed.bin`, and `manifest.json`. Review the generated map, manifest offsets, and image/partition sizes before flashing. Make and verify a fresh full-flash backup before any device write. To flash the just-built profile, substitute the T-Embed's serial port:
+The output profile directory (`artifacts/t-embed`) must not already exist; choose a fresh `--output` directory if needed. Inspect the generated combined map and image/partition sizes before flashing. To flash the just-built profile, substitute the T-Embed's serial port:
 
 ```sh
-python3 "$IDF_PATH/tools/idf.py" \
+IDF_COMPONENT_MANAGER=1 python3 "$IDF_PATH/tools/idf.py" \
   -C "$PWD" -B "$PWD/build-t-embed" \
   -p /dev/cu.usbmodemXXXX flash
 ```
 
-This command flashes the current build without requesting a full erase. Standalone-package hardware verification is pending. Wi-Fi connection, gateway pairing, and a voice interaction were confirmed on one board before repository pruning; prompt approval, repeated Home/restart cycles, reconnect stress, and sustained audio under network congestion have not been comprehensively validated. A successful compile alone does not verify those behaviors.
+Hardware validation confirmed Wi-Fi connection, gateway pairing, and a fast voice conversation on the board. Prompt handling and repeated app transitions have not been comprehensively tested; a successful compile alone does not verify those behaviors.

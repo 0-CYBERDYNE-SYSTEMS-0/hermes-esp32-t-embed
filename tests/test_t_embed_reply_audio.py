@@ -33,7 +33,7 @@ constexpr int ESP_OK = 0, ESP_ERR_INVALID_STATE = 1, ESP_ERR_NVS_NOT_FOUND = 2;
 constexpr int ESP_ERR_INVALID_SIZE = 3, ESP_ERR_NVS_INVALID_NAME = 4;
 constexpr int NVS_READONLY = 0, NVS_READWRITE = 1;
 constexpr int64_t kNoExpiry = 0;
-#define ESP_LOGE(...)
+#define ESP_LOGE(...) do {} while (0)
 std::map<std::string, std::string> saved, pending;
 int init_error = 0, read_error = 0, write_error = 0, commit_error = 0, open_error = 0;
 void wipe(std::string& value) { std::fill(value.begin(), value.end(), 0); value.clear(); }
