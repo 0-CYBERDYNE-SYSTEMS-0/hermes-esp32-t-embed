@@ -145,7 +145,7 @@ void t_embed_ui_render_menu_overlay(const char *title, const char *const *items,
                                     unsigned count, unsigned selected,
                                     const char *hint) {
     if (!ui_ready || !title || !items || !count) return;
-    if (count > 5u) count = 5u;
+    if (count > 6u) count = 6u;
     selected %= count;
     if (overlay_cache_valid && overlay_title == title && overlay_items == items &&
         overlay_count == count && overlay_selection == selected && overlay_hint == hint)
@@ -165,8 +165,9 @@ void t_embed_ui_render_menu_overlay(const char *title, const char *const *items,
         }
         put_text_scanline(8, 8, y, title, COLOR_ACCENT);
         for (unsigned i = 0; i < count; i++) {
-            unsigned first_y = 32u + i * 22u;
-            unsigned last_y = first_y + 20u;
+            unsigned row_height = count > 5u ? 18u : 22u;
+            unsigned first_y = 32u + i * row_height;
+            unsigned last_y = first_y + row_height - 2u;
             if (y >= first_y && y < last_y) {
                 uint16_t fill = i == selected ? COLOR_HEADER : COLOR_BG;
                 for (unsigned x = 16u; x < LCD_W - 16u; x++)

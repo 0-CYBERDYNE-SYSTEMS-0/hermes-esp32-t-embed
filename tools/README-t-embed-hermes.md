@@ -34,6 +34,39 @@ Set Wi-Fi:
 WIFI "YOUR_SSID" "YOUR_WIFI_PASSWORD"
 ```
 
+To retain that network and add a phone hotspot as a fallback, reopen Hermes and send:
+
+```text
+WIFI2 "YOUR_HOTSPOT_SSID" "YOUR_HOTSPOT_PASSWORD"
+```
+
+The primary and fallback credentials are stored separately. Hermes tries the primary
+network when opened and alternates between the saved networks after failed connection
+attempts, with increasing retry delays. It stays on a working network until disconnected;
+it does not interrupt a working hotspot connection to search for home Wi-Fi. With no
+fallback configured, it continues retrying the primary network. On an iPhone, enable
+**Allow Others to Join** and **Maximize Compatibility** under Personal Hotspot.
+Use the exact broadcast SSID, including punctuation: straight (`'`) and curly
+(`’`) apostrophes are different bytes and do not match during Wi-Fi discovery.
+
+To choose a network directly, click the knob and open **Wi-Fi Network**. Select
+**Phone Hotspot**, **Home Wi-Fi**, or **Auto (Home First)**. Manual selection retries
+only that network. The choice lasts until Hermes is reopened, when automatic
+selection resumes; saved credentials are unchanged.
+
+The board does not run a Tailscale client, and an iPhone hotspot does not give hotspot
+clients the phone's Tailscale connection. Remote use needs a gateway address reachable
+from the hotspot. Tailscale Funnel can provide a `wss://<computer>.<tailnet>.ts.net/gadget`
+address usable on both networks; Funnel makes the endpoint publicly reachable. Verify
+gateway authentication and device pairing before enabling it. Private Tailscale Serve
+alone is accessible only from the tailnet.
+
+For a gateway listening on local port 8765, enabling Funnel on the gateway computer
+uses `tailscale funnel --bg http://127.0.0.1:8765`. Take the hostname printed by
+Tailscale and set the board's server to `wss://<that-hostname>/gadget` (default HTTPS
+port 443). Keep the gateway computer awake. This changes the gateway's exposure to
+the public internet; confirm that is intended before running the Funnel command.
+
 After the board restarts, select Hermes again and set the URL reported by `hermes gadget info`:
 
 ```text
@@ -42,7 +75,7 @@ SERVER "ws://YOUR_GATEWAY_LAN_ADDRESS:8765/gadget"
 
 Replace the example with the exact URL printed by `hermes gadget info`; use its `wss://` scheme if TLS is configured. The firmware accepts lowercase `ws://` or `wss://` URLs with a nonempty host. It does not discover a gateway or choose a host, port, or WebSocket path for you.
 
-Each successful `WIFI` or `SERVER` command is saved to NVS and replies `OK ... SAVED; RESTARTING`. The board restarts to the launcher, briefly reconnecting USB; select Hermes again. Wi-Fi credentials and Hermes pairing data are retained in the `hgadget` namespace. If NVS is unavailable, setup reports an error and does not erase it automatically.
+Each successful `WIFI`, `WIFI2`, or `SERVER` command is saved to NVS and replies `OK ... SAVED; RESTARTING`. The board restarts to the launcher, briefly reconnecting USB; select Hermes again. Wi-Fi credentials and Hermes pairing data are retained in the `hgadget` namespace. If NVS is unavailable, setup reports an error and does not erase it automatically.
 
 When the device displays a pairing code, approve it from the Hermes host:
 
@@ -57,15 +90,16 @@ On the tested host, Hermes used local `faster-whisper` with the `base` model on 
 ### Command format and limits
 
 - `WIFI "ssid" "password"`: SSID is required and may be up to 32 bytes; password may be empty and may be up to 63 bytes.
+- `WIFI2 "ssid" "password"`: saves the fallback network with the same limits, preserving the primary credentials.
 - `SERVER "url"`: URL may be up to 255 bytes and must start with `ws://` or `wss://` followed by a host.
 - Wi-Fi quoted values may contain a literal quote as `\"` and a literal backslash as `\\`. These are the only supported escapes. `SERVER` URLs additionally reject decoded quotes and backslashes. Other control characters are rejected. The complete input line is limited to 511 bytes.
 - Values are entered directly into the serial terminal, not through a shell. Do not include real credentials in shell history, screenshots, logs, or shared examples.
 
-If a command is malformed, the board replies with a syntax error and stays running. `ERR WIFI SAVE FAILED`, `ERR SERVER SAVE FAILED`, or `ERR NVS UNAVAILABLE` means the setting was not confirmed saved; use `STATUS`/`DIAG` to inspect reported state and errors.
+If a command is malformed, the board replies with a syntax error and stays running. `ERR WIFI SAVE FAILED`, `ERR WIFI2 SAVE FAILED`, `ERR SERVER SAVE FAILED`, or `ERR NVS UNAVAILABLE` means the setting was not confirmed saved; use `STATUS`/`DIAG` to inspect reported state and errors.
 
 Wi-Fi disconnections show the ESP-IDF reason number and signal strength on screen and as `WIFI_REASON`/`WIFI_RSSI` in `DIAG`. Reason 4 means an association timeout or an inactivity disconnect from the access point, 201 means no access point was found, 202 means authentication failed, and 204 means the handshake timed out. A successful IP connection clears the reason to zero. These diagnostics do not display credentials.
 
-The T-Embed profile allocates eligible Wi-Fi/LwIP memory in PSRAM and retains four internal static TX buffers for DMA. Ordinary allocations larger than 1024 bytes, including the WebSocket client's 4096-byte receive and transmit buffers, prefer PSRAM. A 32 KiB internal reserve supports task stacks and DMA; the SDK keeps allocations that require internal memory there.
+The T-Embed profile allocates eligible Wi-Fi/LwIP memory and mbedTLS allocations in PSRAM and retains four internal static TX buffers for DMA. TLS uses software AES to avoid hardware AES DMA allocation failures when internal memory is low. Ordinary allocations larger than 1024 bytes, including the WebSocket client's 4096-byte receive and transmit buffers, prefer PSRAM. A 32 KiB internal reserve supports task stacks and DMA; the SDK keeps allocations that require internal memory there.
 
 ## Status and diagnostics
 
@@ -76,7 +110,7 @@ STATUS
 DIAG
 ```
 
-`STATUS` reports whether Wi-Fi and a server URL are configured, Wi-Fi up/down, the Hermes screen state, pairing state, mic/speaker readiness, and NVS readiness. `DIAG` reports free/largest internal memory, free PSRAM, and NVS, Wi-Fi, mic, and speaker error names. Neither command prints the SSID, password, server URL, or pairing key. `HELP` lists all supported commands; there is no command for reading stored credentials.
+`STATUS` reports whether primary Wi-Fi, fallback Wi-Fi, and a server URL are configured, the active Wi-Fi profile (`PRIMARY` or `FALLBACK`), selection mode (`AUTO` or `MANUAL`), Wi-Fi up/down, the Hermes screen state, pairing state, mic/speaker readiness, and NVS readiness. `DIAG` reports free/largest internal memory, free PSRAM, and NVS, Wi-Fi, mic, and speaker error names. Neither command prints the SSID, password, server URL, or pairing key. `HELP` lists all supported commands; there is no command for reading stored credentials.
 
 ## Speaker wiring
 
@@ -88,9 +122,9 @@ The Hermes speaker output is I2S for a MAX98357A amplifier: T-Embed GPIO7 is BCL
 - In Hermes Ready or while viewing a reply, hold the knob for about 300 ms to start push-to-talk. Wait for **Listening**, speak, then release to send.
 - While Thinking or Speaking, a hold cancels the active turn and begins a new recording. A short click opens the action menu.
 - While Listening, turn the knob to cancel/discard the recording; the release is consumed and does not send it.
-- In the action menu, rotate to select and click to activate. When Hermes is online and paired, it offers Cancel Turn, New Conversation, Volume, Home, and Back. Back is the default selection. New Conversation requires a second confirmation, defaulting to No; Home is an explicit selection.
+- In the action menu, rotate to select and click to activate. When Hermes is online and paired, it offers Cancel Turn, New Conversation, Volume, Wi-Fi Network, Home, and Back. Back is the default selection. New Conversation requires a second confirmation, defaulting to No; Home is an explicit selection.
 - For an approval prompt, rotate to read/scroll the prompt, then click to open the answer view. It defaults to Deny. Rotate to choose, then make a fresh click after the 600 ms arming window to send the correlated answer. A held press cannot approve a prompt, and approval never uses voice capture.
-- While offline or pairing, recording is disabled. Use the menu to return Home or Back.
+- While offline or pairing, recording is disabled. The menu offers Home, Wi-Fi Network, and Back.
 
 ## Build and validation
 

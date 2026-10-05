@@ -134,14 +134,16 @@ public:
         last_error_ = error;
     }
 
-    bool set_wifi(std::string_view ssid, std::string_view password) {
+    bool set_wifi(std::string_view ssid, std::string_view password, bool fallback = false) {
         std::string ssid_copy(ssid);
         std::string password_copy(password);
+        const char *ssid_key = fallback ? "wifi2_ssid" : "wifi_ssid";
+        const char *password_key = fallback ? "wifi2_pass" : "wifi_pass";
         nvs_handle_t handle;
-        esp_err_t error = open("wifi_ssid", NVS_READWRITE, &handle);
+        esp_err_t error = open(ssid_key, NVS_READWRITE, &handle);
         if (error == ESP_OK) {
-            error = nvs_set_str(handle, "wifi_ssid", ssid_copy.c_str());
-            if (error == ESP_OK) error = nvs_set_str(handle, "wifi_pass", password_copy.c_str());
+            error = nvs_set_str(handle, ssid_key, ssid_copy.c_str());
+            if (error == ESP_OK) error = nvs_set_str(handle, password_key, password_copy.c_str());
             if (error == ESP_OK) error = nvs_commit(handle);
             nvs_close(handle);
         }
@@ -215,8 +217,12 @@ class HermesWifi {
 public:
     explicit HermesWifi(QueueHandle_t events) : events_(events) {}
 
-    bool start(std::string_view ssid, std::string_view password) {
-        if (ssid.empty() || ssid.size() > 32 || password.size() > 63) {
+    ~HermesWifi() { secure_zero(configs_, sizeof(configs_)); }
+
+    bool start(std::string_view ssid, std::string_view password,
+               std::string_view fallback_ssid = {}, std::string_view fallback_password = {}) {
+        if (ssid.empty() || ssid.size() > 32 || password.size() > 63 ||
+            fallback_ssid.size() > 32 || fallback_password.size() > 63) {
             last_error_ = ESP_ERR_INVALID_ARG;
             return false;
         }
@@ -238,13 +244,16 @@ public:
             &HermesWifi::event_handler, this, &ip_handler_);
         if (error != ESP_OK) return fail(error);
 
-        wifi_config_t config{};
-        std::memcpy(config.sta.ssid, ssid.data(), ssid.size());
-        std::memcpy(config.sta.password, password.data(), password.size());
+        std::memcpy(configs_[0].sta.ssid, ssid.data(), ssid.size());
+        std::memcpy(configs_[0].sta.password, password.data(), password.size());
+        fallback_configured_ = !fallback_ssid.empty();
+        if (fallback_configured_) {
+            std::memcpy(configs_[1].sta.ssid, fallback_ssid.data(), fallback_ssid.size());
+            std::memcpy(configs_[1].sta.password, fallback_password.data(), fallback_password.size());
+        }
         error = esp_wifi_set_storage(WIFI_STORAGE_RAM);
         if (error == ESP_OK) error = esp_wifi_set_mode(WIFI_MODE_STA);
-        if (error == ESP_OK) error = esp_wifi_set_config(WIFI_IF_STA, &config);
-        secure_zero(config.sta.password, sizeof(config.sta.password));
+        if (error == ESP_OK) error = esp_wifi_set_config(WIFI_IF_STA, &configs_[0]);
         if (error == ESP_OK) error = esp_wifi_start();
         if (error == ESP_OK) error = esp_wifi_set_ps(WIFI_PS_NONE);
         if (error == ESP_OK) error = esp_wifi_connect();
@@ -256,6 +265,27 @@ public:
 
     bool initialized() const { return initialized_; }
     esp_err_t last_error() const { return last_error_; }
+    bool using_fallback() const { return active_profile_ != 0; }
+    bool automatic() const { return automatic_; }
+    bool fallback_configured() const { return fallback_configured_; }
+
+    bool choose_network(size_t profile, bool automatic, uint32_t now) {
+        if (!initialized_ || profile > 1 || (profile == 1 && !fallback_configured_)) {
+            last_error_ = ESP_ERR_INVALID_ARG;
+            return false;
+        }
+        esp_err_t error = esp_wifi_disconnect();
+        if (error != ESP_OK && error != ESP_ERR_WIFI_NOT_CONNECT) {
+            last_error_ = error;
+            return false;
+        }
+        automatic_ = automatic;
+        requested_profile_ = static_cast<int>(profile);
+        backoff_index_ = 0;
+        schedule_retry(now);
+        last_error_ = ESP_OK;
+        return true;
+    }
 
     bool connect_retry_due(uint32_t now) const {
         return initialized_ && retry_at_ms_ != 0 &&
@@ -264,12 +294,24 @@ public:
 
     void retry(uint32_t now) {
         if (!initialized_) return;
-        esp_err_t error = esp_wifi_connect();
-        if (error != ESP_OK) ESP_LOGW(kTag, "Wi-Fi reconnect request failed: %s", esp_err_to_name(error));
-        schedule_retry(now);
+        retry_at_ms_ = 0;
+        if (requested_profile_ >= 0) {
+            active_profile_ = static_cast<size_t>(requested_profile_);
+            requested_profile_ = -1;
+        } else if (automatic_ && fallback_configured_) {
+            active_profile_ ^= 1;
+        }
+        esp_err_t error = esp_wifi_set_config(WIFI_IF_STA, &configs_[active_profile_]);
+        if (error == ESP_OK) error = esp_wifi_connect();
+        last_error_ = error;
+        if (error != ESP_OK) {
+            ESP_LOGW(kTag, "Wi-Fi reconnect request failed: %s", esp_err_to_name(error));
+            schedule_retry(now);
+        }
     }
 
     void connected() {
+        last_error_ = ESP_OK;
         backoff_index_ = 0;
         retry_at_ms_ = 0;
     }
@@ -316,16 +358,21 @@ private:
     }
 
     QueueHandle_t events_ = nullptr;
+    wifi_config_t configs_[2]{};
     esp_netif_t *netif_ = nullptr;
     esp_event_handler_instance_t wifi_handler_ = nullptr;
     esp_event_handler_instance_t ip_handler_ = nullptr;
     uint32_t retry_at_ms_ = 0;
     size_t backoff_index_ = 0;
+    size_t active_profile_ = 0;
+    int requested_profile_ = -1;
     esp_err_t last_error_ = ESP_OK;
     bool initialized_ = false;
+    bool fallback_configured_ = false;
+    bool automatic_ = true;
 };
 
-enum class LocalView : uint8_t { None, ActionMenu, NewSessionConfirm, Volume, Prompt };
+enum class LocalView : uint8_t { None, ActionMenu, NewSessionConfirm, Volume, WifiNetwork, Prompt };
 
 struct PromptGuard {
     bool active = false;
@@ -442,11 +489,17 @@ public:
         auto password_value = storage_.get("wifi_pass");
         std::string ssid = ssid_value.value_or("");
         std::string password = password_value.value_or("");
-        bool wifi_started = nvs_ready_ && net_events_ && wifi_->start(ssid, password);
+        auto fallback_ssid = storage_.get("wifi2_ssid");
+        auto fallback_password = storage_.get("wifi2_pass");
+        bool wifi_started = nvs_ready_ && net_events_ && wifi_->start(ssid, password,
+            fallback_ssid ? std::string_view(*fallback_ssid) : std::string_view{},
+            fallback_password ? std::string_view(*fallback_password) : std::string_view{});
         wipe(ssid);
         wipe(password);
         if (ssid_value) wipe(*ssid_value);
         if (password_value) wipe(*password_value);
+        if (fallback_ssid) wipe(*fallback_ssid);
+        if (fallback_password) wipe(*fallback_password);
         if (!wifi_started) {
             const char *detail = nvs_ready_ ? "Configure Wi-Fi with USB" : "NVS unavailable; configuration cannot be saved";
             app.on_network(false, detail);
@@ -563,14 +616,15 @@ private:
         }
 
         if (local_view_ == LocalView::ActionMenu && (!app.online() || !app.paired())) {
-            if (selection_ > 1u) selection_ = 1u;
+            if (selection_ > 2u) selection_ = 2u;
         }
     }
 
     t_embed_input_context_t input_context(const hg::App &app) const {
         if (local_view_ == LocalView::ActionMenu ||
             local_view_ == LocalView::NewSessionConfirm ||
-            local_view_ == LocalView::Volume)
+            local_view_ == LocalView::Volume ||
+            local_view_ == LocalView::WifiNetwork)
             return T_EMBED_INPUT_HERMES_MENU;
         if (local_view_ == LocalView::Prompt && app.screen() == hg::Screen::Prompt)
             return T_EMBED_INPUT_HERMES_PROMPT;
@@ -602,7 +656,8 @@ private:
         }
         if (local_view_ == LocalView::ActionMenu ||
             local_view_ == LocalView::NewSessionConfirm ||
-            local_view_ == LocalView::Volume) {
+            local_view_ == LocalView::Volume ||
+            local_view_ == LocalView::WifiNetwork) {
             handle_menu_input(app, input);
             return;
         }
@@ -692,10 +747,26 @@ private:
 
     void open_action_menu(const hg::App &app) {
         local_view_ = LocalView::ActionMenu;
-        selection_ = app.online() && app.paired() ? 4u : 1u;
+        selection_ = app.online() && app.paired() ? 5u : 2u;
     }
 
     void handle_menu_input(hg::App &app, const t_embed_input_event_t &input) {
+        if (local_view_ == LocalView::WifiNetwork) {
+            selection_ = t_embed_menu_move(selection_, input.detents, 4u);
+            if (input.short_click && input.press_context == T_EMBED_INPUT_HERMES_MENU) {
+                if (selection_ == 3u) {
+                    local_view_ = LocalView::ActionMenu;
+                    selection_ = app.online() && app.paired() ? 5u : 2u;
+                } else if (wifi_ && wifi_->choose_network(selection_ == 2u ? 1u : 0u,
+                                                         selection_ == 0u, system_.now_ms())) {
+                    wifi_up_ = false;
+                    audio_.abort();
+                    app.on_network(false, selection_ == 2u ? "Connecting to phone hotspot" : "Connecting to home Wi-Fi");
+                    local_view_ = LocalView::None;
+                }
+            }
+            return;
+        }
         if (local_view_ == LocalView::Volume) {
             int64_t next = static_cast<int64_t>(volume_draft_) +
                            static_cast<int64_t>(input.detents) * 5;
@@ -711,7 +782,7 @@ private:
                 std::snprintf(command, sizeof(command), "set volume %u", volume_draft_);
                 (void)app.console(command);
                 local_view_ = LocalView::ActionMenu;
-                selection_ = app.online() && app.paired() ? 4u : 1u;
+                selection_ = app.online() && app.paired() ? 5u : 2u;
             }
             return;
         }
@@ -725,20 +796,21 @@ private:
                     local_view_ = LocalView::None;
                 } else {
                     local_view_ = LocalView::ActionMenu;
-                    selection_ = 4u;
+                    selection_ = 5u;
                 }
             }
             return;
         }
 
-        size_t count = app.online() && app.paired() ? 5u : 2u;
+        size_t count = app.online() && app.paired() ? 6u : 3u;
         if (input.detents != 0) selection_ = t_embed_menu_move(selection_, input.detents,
                                                                  static_cast<unsigned>(count));
         if (!input.short_click || input.press_context != T_EMBED_INPUT_HERMES_MENU) return;
 
-        if (count == 2u) {
+        if (count == 3u) {
             if (selection_ == 0u) restart_to_launcher(app);
-            local_view_ = LocalView::None;
+            local_view_ = selection_ == 1u ? LocalView::WifiNetwork : LocalView::None;
+            if (local_view_ == LocalView::WifiNetwork) selection_ = 3u;
             return;
         }
 
@@ -761,6 +833,10 @@ private:
                 local_view_ = LocalView::Volume;
                 break;
             case 3:
+                local_view_ = LocalView::WifiNetwork;
+                selection_ = 3u;
+                break;
+            case 4:
                 restart_to_launcher(app);
                 break;
             default:
@@ -798,15 +874,21 @@ private:
                 prompt_selection_, outcome);
         } else if (local_view_ == LocalView::ActionMenu) {
             static const char *const active_items[] = {
-                "CANCEL TURN", "NEW CONVERSATION", "VOLUME", "HOME", "BACK"};
-            static const char *const offline_items[] = {"HOME", "BACK"};
+                "CANCEL TURN", "NEW CONVERSATION", "VOLUME", "WI-FI NETWORK", "HOME", "BACK"};
+            static const char *const offline_items[] = {"HOME", "WI-FI NETWORK", "BACK"};
             if (app.online() && app.paired()) {
-                t_embed_ui_render_menu_overlay("HERMES MENU", active_items, 5u,
+                t_embed_ui_render_menu_overlay("HERMES MENU", active_items, 6u,
                     selection_, "TURN SELECT PRESS OPEN");
             } else {
-                t_embed_ui_render_menu_overlay("HERMES", offline_items, 2u,
-                    selection_ % 2u, "TURN SELECT PRESS OPEN");
+                t_embed_ui_render_menu_overlay("HERMES", offline_items, 3u,
+                    selection_ % 3u, "TURN SELECT PRESS OPEN");
             }
+        } else if (local_view_ == LocalView::WifiNetwork) {
+            const char *const items[] = {"AUTO (HOME FIRST)", "HOME WI-FI",
+                wifi_ && wifi_->fallback_configured() ? "PHONE HOTSPOT" : "HOTSPOT NOT SET", "BACK"};
+            const char *mode = wifi_ && !wifi_->automatic()
+                ? (wifi_->using_fallback() ? "MODE PHONE HOTSPOT" : "MODE HOME WI-FI") : "MODE AUTO";
+            t_embed_ui_render_menu_overlay("WI-FI NETWORK", items, 4u, selection_, mode);
         } else if (local_view_ == LocalView::NewSessionConfirm) {
             static const char *const items[] = {"YES", "NO"};
             t_embed_ui_render_menu_overlay("START NEW CONVERSATION?", items, 2u,
@@ -860,7 +942,7 @@ private:
 
     static bool parse_wifi(std::string_view line, std::string &ssid,
                            std::string &password) {
-        size_t cursor = 4;
+        size_t cursor = line.find(' ');
         if (!parse_quoted(line, cursor, 32, ssid) || ssid.empty() ||
             !parse_quoted(line, cursor, 63, password) || cursor != line.size())
             return false;
@@ -921,14 +1003,18 @@ private:
 
     bool process_usb_line(hg::App &app, std::string_view line) {
         if (line == "HELP") {
-            write_usb("Commands: WIFI \"ssid\" \"password\" | SERVER \"ws[s]://host/path\" | STATUS | DIAG");
+            write_usb("Commands: WIFI \"ssid\" \"password\" | WIFI2 \"ssid\" \"password\" | SERVER \"ws[s]://host/path\" | STATUS | DIAG");
         } else if (line == "STATUS") {
             bool wifi_configured = configured("wifi_ssid");
+            bool fallback_configured = configured("wifi2_ssid");
             bool server_configured = configured("server");
             char result[256];
             std::snprintf(result, sizeof(result),
-                "OK STATUS WIFI_CONFIGURED=%s SERVER_CONFIGURED=%s WIFI=%s HERMES=%s PAIRED=%s MIC=%s SPEAKER=%s NVS=%s",
-                wifi_configured ? "YES" : "NO", server_configured ? "YES" : "NO",
+                "OK STATUS WIFI_CONFIGURED=%s WIFI2_CONFIGURED=%s WIFI_PROFILE=%s WIFI_MODE=%s SERVER_CONFIGURED=%s WIFI=%s HERMES=%s PAIRED=%s MIC=%s SPEAKER=%s NVS=%s",
+                wifi_configured ? "YES" : "NO", fallback_configured ? "YES" : "NO",
+                wifi_ && wifi_->using_fallback() ? "FALLBACK" : "PRIMARY",
+                wifi_ && !wifi_->automatic() ? "MANUAL" : "AUTO",
+                server_configured ? "YES" : "NO",
                 wifi_up_ ? "UP" : "DOWN", hg::screen_name(app.screen()),
                 app.paired() ? "YES" : "NO",
                 audio_.microphone_status() == ESP_OK ? "READY" : "ERROR",
@@ -949,13 +1035,14 @@ private:
                 esp_err_to_name(audio_.microphone_status()),
                 esp_err_to_name(audio_.speaker_status()));
             write_usb(result);
-        } else if (has_prefix(line, "WIFI ")) {
+        } else if (has_prefix(line, "WIFI ") || has_prefix(line, "WIFI2 ")) {
+            bool fallback = has_prefix(line, "WIFI2 ");
             std::string ssid, password;
             bool valid = parse_wifi(line, ssid, password);
             if (!valid) {
                 wipe(ssid);
                 wipe(password);
-                write_usb("ERR WIFI SYNTAX; USE QUOTED VALUES");
+                write_usb(fallback ? "ERR WIFI2 SYNTAX; USE QUOTED VALUES" : "ERR WIFI SYNTAX; USE QUOTED VALUES");
                 return false;
             }
             if (!nvs_ready_) {
@@ -964,14 +1051,14 @@ private:
                 write_usb("ERR NVS UNAVAILABLE; SETTINGS WERE NOT ERASED");
                 return false;
             }
-            bool saved = storage_.set_wifi(ssid, password);
+            bool saved = storage_.set_wifi(ssid, password, fallback);
             wipe(ssid);
             wipe(password);
             if (!saved) {
-                write_usb("ERR WIFI SAVE FAILED");
+                write_usb(fallback ? "ERR WIFI2 SAVE FAILED" : "ERR WIFI SAVE FAILED");
                 return false;
             }
-            write_usb("OK WIFI SAVED; RESTARTING");
+            write_usb(fallback ? "OK WIFI2 SAVED; RESTARTING" : "OK WIFI SAVED; RESTARTING");
             return true;
         } else if (has_prefix(line, "SERVER ")) {
             std::string url;
