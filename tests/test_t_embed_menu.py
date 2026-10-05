@@ -20,7 +20,7 @@ class TEmbedMenu(unittest.TestCase):
 #include <string.h>
 enum { LCD_W = 320, LCD_H = 170 };
 enum { COLOR_HEADER = 1, COLOR_BG, COLOR_GRID, COLOR_ACCENT, COLOR_TEXT, COLOR_DIM };
-bool ui_ready = true;
+struct { bool ready; } stats = {true};
 uint8_t line[LCD_W * 2];
 bool overlay_cache_valid, prompt_overlay_valid;
 const char *overlay_title, *overlay_hint;

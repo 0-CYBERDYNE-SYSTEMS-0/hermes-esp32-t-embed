@@ -1,19 +1,23 @@
-# Hermes T-Embed status
+# Hermes T-Embed experimental release
 
-## Hardware observations
+## Observed hardware results
 
-On one standard LILYGO T-Embed ESP32-S3R8 with an attached speaker, Wi-Fi connection, Gadget gateway pairing, and a voice interaction were confirmed. The user reported that a subsequent request responded immediately; no quantitative latency benchmark was recorded. The standalone Hermes-only source package has not yet received a separate hardware verification pass.
+On one standard LILYGO T-Embed ESP32-S3R8 with an attached speaker, the firmware connected to 2.4 GHz Wi-Fi, connected to the Gadget gateway, and completed pairing. The user confirmed a voice interaction worked and that a subsequent request responded immediately. No quantitative warm-latency benchmark or exhaustive hardware validation was performed.
+
+The T-Embed build uses the ESP-IDF revision in `firmware-targets.json`. Wi-Fi/LwIP allocations and ordinary WebSocket buffers can use PSRAM; internal memory is reserved for task stacks and DMA. These settings resolved the observed Wi-Fi association and WebSocket client-init failures. The publication CI built all nine catalog profiles successfully, including T-Embed. Physical validation remains limited to the T-Embed observations above; the other profiles retain their upstream scope.
 
 ## Known limitations
 
-- Standalone runtime memory headroom has not been measured; reconnect and sustained-audio validation is pending.
-- The transport has one pending send slot. Under congestion, a control message such as `audio.end` can be rejected without a retry by the portable core. This is a reliability risk that has not been observed in the confirmed voice interaction.
-- Stopping microphone capture may discard queued tail samples; speaker-buffer overflow drops audio. Congestion behavior is unvalidated.
-- Prompt approval, cancellation, repeated Home/restart cycles, and reconnect stress are not comprehensively validated on hardware.
-- The gateway assembles an utterance before transcription. The transcription model may download or load on first use; response time depends on the gateway, provider, and configuration.
+- Internal heap remains tight after connection. Reconnects and sustained audio require further hardware validation.
+- The transport has one pending send slot. Under congestion, a control message such as `audio.end` can be rejected without a retry by the portable core. This is an unobserved reliability risk, not the explanation for the successful request's first-use delay.
+- Stopping microphone capture may discard queued tail samples; speaker-buffer overflow drops audio. Congestion behavior is not validated.
+- Prompt approval, cancellation, repeated app transitions, and reconnect stress are not comprehensively validated on hardware.
+- The gateway assembles an utterance before starting transcription. The local transcription model is loaded on first use; no latency improvement is promised across providers or machines.
 
-## Build and distribution
+## Distribution
 
-The repository supports one profile, `t-embed`. The pinned ESP-IDF workflow compiles that profile and uploads a CI artifact containing `bootloader.bin`, `partition-table.bin`, `hermes_t_embed.bin`, and `manifest.json`. No firmware binary is committed to the repository. Review the manifest and image/partition sizes before any device write; use the build guide's backup and flash instructions.
+Only source and build instructions are published. Device flash/NVS backups, credentials, generated configurations, and local build artifacts are excluded. Build this repository's `t-embed` profile; upstream browser flashers do not distribute this Hermes integration.
 
-The repository retains the upstream ESPARGOS/ESP-SDR GPL license as source provenance, but no SDR receiver or USB microphone bridge application is part of this firmware scope. The Hermes core's MIT license and third-party notices remain under `platform/hermes_core/`.
+## Publication checks
+
+The [publication workflow](https://github.com/0-CYBERDYNE-SYSTEMS-0/hermes-esp32-t-embed/actions/runs/37242576937) passed the existing host checks and built all nine firmware profiles from source commit `7440892`. The subsequent documentation-only commit records those results. The public history starts from a sanitized source snapshot; local working history and device backups were not uploaded.

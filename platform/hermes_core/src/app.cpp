@@ -83,6 +83,12 @@ const App::Route App::kRoutes[] = {
 
 App::App(Hal& hal, DeviceProfile profile) : hal_(hal), profile_(std::move(profile)) {}
 
+void App::set_voice_replies_enabled(bool enabled) {
+  voice_replies_enabled_ = enabled;
+  if (!enabled) stop_playback();
+  update_model();
+}
+
 void App::log(LogLevel level, std::string_view msg) {
   if (hal_.system) hal_.system->log(level, msg);
 }
@@ -469,7 +475,7 @@ void App::h_transcript(const json::Value& m) {
 void App::h_reply_delta(const json::Value& m) {
   if (mode_ == Mode::Listening) return;
   reply_ = m["text"].as_string();
-  scroll_ = -1;
+  if (!profile_.has_scroll_buttons) scroll_ = -1;
   last_turn_rx_ = now();
   if (mode_ != Mode::Responding) {
     mode_ = Mode::Responding;
@@ -487,7 +493,8 @@ void App::h_reply(const json::Value& m) {
   if (mode_ == Mode::Listening) return;
   reply_ = text;
   reply_final_ = true;
-  scroll_ = 0;  // a finished reply is read from the top
+  // Start at the top unless the reader already chose a position.
+  if (!profile_.has_scroll_buttons || scroll_ < 0) scroll_ = 0;
   page_at_ = now() + page_dwell_ms();
   status_.clear();
   mode_ = Mode::Responding;
@@ -495,7 +502,7 @@ void App::h_reply(const json::Value& m) {
 }
 
 void App::h_audio_start(const json::Value& m) {
-  if (!hal_.speaker || mode_ == Mode::Listening) return;
+  if (!voice_replies_enabled_ || !hal_.speaker || mode_ == Mode::Listening) return;
   uint32_t rate = static_cast<uint32_t>(m["rate"].as_int(profile_.speaker_rate));
   if (m["format"].str_or("pcm16") != "pcm16") {
     log(LogLevel::Warn, "unsupported audio format");
@@ -530,7 +537,9 @@ void App::stop_playback() {
   in_stream_ = -1;
 }
 
-bool App::speaking() const { return hal_.speaker && (in_stream_ >= 0 || hal_.speaker->busy()); }
+bool App::speaking() const {
+  return voice_replies_enabled_ && hal_.speaker && (in_stream_ >= 0 || hal_.speaker->busy());
+}
 
 void App::on_transport_binary(const uint8_t* data, size_t len) {
   last_rx_ = now();
@@ -543,7 +552,7 @@ void App::on_transport_binary(const uint8_t* data, size_t len) {
     return;
   }
   if (f.channel == proto::Channel::Audio) {
-    if (in_stream_ < 0 || f.stream != in_stream_ || !hal_.speaker) return;
+    if (!voice_replies_enabled_ || in_stream_ < 0 || f.stream != in_stream_ || !hal_.speaker) return;
     size_t n = f.payload_len / 2;
     pcm_buf_.resize(n);
     std::memcpy(pcm_buf_.data(), f.payload, n * 2);  // payload may be unaligned
@@ -758,7 +767,7 @@ void App::on_button(Button button, bool pressed) {
       if (!pressed) break;
       if (prompt_showing()) break;
       page_at_ = now() + kManualScrollPauseMs;
-      if (mode_ == Mode::Idle && overlay_ == Overlay::None && !reply_.empty() &&
+      if (!profile_.has_scroll_buttons && mode_ == Mode::Idle && overlay_ == Overlay::None && !reply_.empty() &&
           static_cast<int32_t>(reply_until_ - now()) <= 0) {
         reply_until_ = now() + kReplyLingerMs;  // first press brings the last reply back
         scroll_ = 0;
@@ -923,7 +932,8 @@ bool App::turn_page() {
   if (model_.screen == Screen::Card) {
     pos = &card_scroll_;
     body = &card_body_;
-  } else if ((model_.screen == Screen::Responding || model_.screen == Screen::Ready) && scroll_ >= 0) {
+  } else if (!profile_.has_scroll_buttons &&
+             (model_.screen == Screen::Responding || model_.screen == Screen::Ready) && scroll_ >= 0) {
     pos = &scroll_;
     body = &reply_;
   }
@@ -1260,7 +1270,7 @@ void App::tick() {
 
 void App::update_model() {
   UiModel& m = model_;
-  m.title = name_;
+  m.title = voice_replies_enabled_ ? name_ : "TEXT | " + name_;
   m.code.clear();
   m.detail.clear();
   m.body.clear();
@@ -1403,7 +1413,8 @@ void App::update_model() {
     m.body = reply_;
     m.hint = profile_.touch_screen ? (talk_mode_ == TalkMode::Tap ? "Tap the screen to talk" : "Hold the screen to talk")
                                    : (talk_mode_ == TalkMode::Tap ? "tap " : "hold ") + talk + " to talk";
-    bool showing_reply = !reply_.empty() && static_cast<int32_t>(reply_until_ - now()) > 0;
+    bool showing_reply = !reply_.empty() &&
+                         (profile_.has_scroll_buttons || static_cast<int32_t>(reply_until_ - now()) > 0);
     m.hero = !showing_reply;
     if (m.hero) {
       m.headline = "Hi, I'm Hermes";
@@ -1412,6 +1423,14 @@ void App::update_model() {
   }
   bool keeps_detail = m.screen == Screen::Pairing || m.screen == Screen::Boot || m.screen == Screen::Prompt;
   if (!notice_.empty() && !keeps_detail) m.detail = notice_;
+  if (profile_.has_scroll_buttons && !reply_.empty() &&
+      (m.screen == Screen::Ready || m.screen == Screen::Responding)) {
+    if (scroll_ >= 0) {
+      scroll_body(0);  // Clamp after cumulative text or status lines change.
+      m.scroll = scroll_;
+    }
+    m.hint = "SCROLL / " + talk;
+  }
   if (!hint_flash_.empty()) m.hint = hint_flash_;
   if (ui_) ui_->render(m);
 }

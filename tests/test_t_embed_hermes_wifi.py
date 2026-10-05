@@ -37,8 +37,8 @@ constexpr int NVS_READONLY = 0, NVS_READWRITE = 1;
 using nvs_handle_t = int;
 using nvs_open_mode_t = int;
 const char *esp_err_to_name(int) { return "fake error"; }
-#define ESP_LOGE(...)
-#define ESP_LOGW(...)
+#define ESP_LOGE(...) do {} while (0)
+#define ESP_LOGW(...) do {} while (0)
 const char *kTag = "test";
 constexpr int kNetworkBackoffMs[] = {1000, 2000, 4000, 8000, 15000, 30000};
 void secure_zero(void *p, size_t n) { std::memset(p, 0, n); }

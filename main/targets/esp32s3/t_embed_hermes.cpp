@@ -372,7 +372,7 @@ private:
     bool automatic_ = true;
 };
 
-enum class LocalView : uint8_t { None, ActionMenu, NewSessionConfirm, Volume, WifiNetwork, Prompt };
+enum class LocalView : uint8_t { None, ActionMenu, NewSessionConfirm, ReplyAudio, Volume, WifiNetwork, Prompt };
 
 struct PromptGuard {
     bool active = false;
@@ -482,6 +482,7 @@ public:
                   .set("internal_largest", static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)))
                   .set("psram_free", static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
         };
+        load_voice_reply(app);
         app.begin();
         transport_.set_text_observer(&HermesRunner::observe_text, this);
 
@@ -615,14 +616,15 @@ private:
             answer_view_ = false;
         }
 
-        if (local_view_ == LocalView::ActionMenu && (!app.online() || !app.paired())) {
-            if (selection_ > 2u) selection_ = 2u;
-        }
+        if (local_view_ == LocalView::ActionMenu &&
+            action_menu_online_ != (app.online() && app.paired()))
+            open_action_menu(app);
     }
 
     t_embed_input_context_t input_context(const hg::App &app) const {
         if (local_view_ == LocalView::ActionMenu ||
             local_view_ == LocalView::NewSessionConfirm ||
+            local_view_ == LocalView::ReplyAudio ||
             local_view_ == LocalView::Volume ||
             local_view_ == LocalView::WifiNetwork)
             return T_EMBED_INPUT_HERMES_MENU;
@@ -656,6 +658,7 @@ private:
         }
         if (local_view_ == LocalView::ActionMenu ||
             local_view_ == LocalView::NewSessionConfirm ||
+            local_view_ == LocalView::ReplyAudio ||
             local_view_ == LocalView::Volume ||
             local_view_ == LocalView::WifiNetwork) {
             handle_menu_input(app, input);
@@ -747,16 +750,52 @@ private:
 
     void open_action_menu(const hg::App &app) {
         local_view_ = LocalView::ActionMenu;
-        selection_ = app.online() && app.paired() ? 5u : 2u;
+        action_menu_online_ = app.online() && app.paired();
+        selection_ = action_menu_online_ ? 5u : 3u;
+    }
+
+    void load_voice_reply(hg::App &app) {
+        auto value = storage_.get("voice_reply");
+        esp_err_t error = storage_.last_error();
+        bool valid = (error == ESP_OK || error == ESP_ERR_NVS_NOT_FOUND) &&
+                     (!value || *value == "on" || *value == "off");
+        app.set_voice_replies_enabled(valid && (!value || *value == "on"));
+        if (!valid) {
+            reply_audio_notice_ = "VOICE SETTING ERROR";
+            local_view_ = LocalView::ReplyAudio;
+            selection_ = 2u;
+        }
     }
 
     void handle_menu_input(hg::App &app, const t_embed_input_event_t &input) {
+        if (local_view_ == LocalView::ReplyAudio) {
+            selection_ = t_embed_menu_move(selection_, input.detents, 3u);
+            if (input.short_click && input.press_context == T_EMBED_INPUT_HERMES_MENU) {
+                if (selection_ == 0u) {
+                    app.set_voice_replies_enabled(!app.voice_replies_enabled());
+                    storage_.set("voice_reply", app.voice_replies_enabled() ? "on" : "off");
+                    if (storage_.last_error() == ESP_OK) {
+                        reply_audio_notice_ = nullptr;
+                        local_view_ = LocalView::None;
+                    } else {
+                        reply_audio_notice_ = "SETTING NOT SAVED";
+                    }
+                    t_embed_ui_invalidate_overlays();
+                } else if (selection_ == 1u) {
+                    volume_draft_ = read_volume();
+                    std::snprintf(volume_label_, sizeof(volume_label_), "VOLUME %u PCT", volume_draft_);
+                    local_view_ = LocalView::Volume;
+                } else {
+                    open_action_menu(app);
+                }
+            }
+            return;
+        }
         if (local_view_ == LocalView::WifiNetwork) {
             selection_ = t_embed_menu_move(selection_, input.detents, 4u);
             if (input.short_click && input.press_context == T_EMBED_INPUT_HERMES_MENU) {
                 if (selection_ == 3u) {
-                    local_view_ = LocalView::ActionMenu;
-                    selection_ = app.online() && app.paired() ? 5u : 2u;
+                    open_action_menu(app);
                 } else if (wifi_ && wifi_->choose_network(selection_ == 2u ? 1u : 0u,
                                                          selection_ == 0u, system_.now_ms())) {
                     wifi_up_ = false;
@@ -781,8 +820,8 @@ private:
                 char command[32];
                 std::snprintf(command, sizeof(command), "set volume %u", volume_draft_);
                 (void)app.console(command);
-                local_view_ = LocalView::ActionMenu;
-                selection_ = app.online() && app.paired() ? 5u : 2u;
+                local_view_ = LocalView::ReplyAudio;
+                selection_ = 2u;
             }
             return;
         }
@@ -795,21 +834,22 @@ private:
                     (void)app.console("new-session");
                     local_view_ = LocalView::None;
                 } else {
-                    local_view_ = LocalView::ActionMenu;
-                    selection_ = 5u;
+                    open_action_menu(app);
                 }
             }
             return;
         }
 
-        size_t count = app.online() && app.paired() ? 6u : 3u;
+        size_t count = app.online() && app.paired() ? 6u : 4u;
         if (input.detents != 0) selection_ = t_embed_menu_move(selection_, input.detents,
                                                                  static_cast<unsigned>(count));
         if (!input.short_click || input.press_context != T_EMBED_INPUT_HERMES_MENU) return;
 
-        if (count == 3u) {
+        if (count == 4u) {
             if (selection_ == 0u) restart_to_launcher(app);
-            local_view_ = selection_ == 1u ? LocalView::WifiNetwork : LocalView::None;
+            local_view_ = selection_ == 1u ? LocalView::WifiNetwork :
+                          selection_ == 2u ? LocalView::ReplyAudio : LocalView::None;
+            if (local_view_ == LocalView::ReplyAudio) selection_ = 0u;
             if (local_view_ == LocalView::WifiNetwork) selection_ = 3u;
             return;
         }
@@ -828,9 +868,8 @@ private:
                 selection_ = 1u;  // No is the safe default.
                 break;
             case 2:
-                volume_draft_ = read_volume();
-                std::snprintf(volume_label_, sizeof(volume_label_), "VOLUME %u PCT", volume_draft_);
-                local_view_ = LocalView::Volume;
+                local_view_ = LocalView::ReplyAudio;
+                selection_ = 0u;
                 break;
             case 3:
                 local_view_ = LocalView::WifiNetwork;
@@ -874,15 +913,21 @@ private:
                 prompt_selection_, outcome);
         } else if (local_view_ == LocalView::ActionMenu) {
             static const char *const active_items[] = {
-                "CANCEL TURN", "NEW CONVERSATION", "VOLUME", "WI-FI NETWORK", "HOME", "BACK"};
-            static const char *const offline_items[] = {"HOME", "WI-FI NETWORK", "BACK"};
+                "CANCEL TURN", "NEW CONVERSATION", "REPLY AUDIO", "WI-FI NETWORK", "HOME", "BACK"};
+            static const char *const offline_items[] = {"HOME", "WI-FI NETWORK", "REPLY AUDIO", "BACK"};
             if (app.online() && app.paired()) {
                 t_embed_ui_render_menu_overlay("HERMES MENU", active_items, 6u,
                     selection_, "TURN SELECT PRESS OPEN");
             } else {
-                t_embed_ui_render_menu_overlay("HERMES", offline_items, 3u,
-                    selection_ % 3u, "TURN SELECT PRESS OPEN");
+                t_embed_ui_render_menu_overlay("HERMES", offline_items, 4u,
+                    selection_ % 4u, "TURN SELECT PRESS OPEN");
             }
+        } else if (local_view_ == LocalView::ReplyAudio) {
+            static const char *const on_items[] = {"VOICE REPLIES: ON", "VOLUME", "BACK"};
+            static const char *const off_items[] = {"VOICE REPLIES: OFF", "VOLUME", "BACK"};
+            t_embed_ui_render_menu_overlay("REPLY AUDIO",
+                app.voice_replies_enabled() ? on_items : off_items, 3u, selection_,
+                reply_audio_notice_ ? reply_audio_notice_ : "TURN SELECT PRESS CHANGE");
         } else if (local_view_ == LocalView::WifiNetwork) {
             const char *const items[] = {"AUTO (HOME FIRST)", "HOME WI-FI",
                 wifi_ && wifi_->fallback_configured() ? "PHONE HOTSPOT" : "HOTSPOT NOT SET", "BACK"};
@@ -1135,6 +1180,7 @@ private:
     QueueHandle_t net_events_ = nullptr;
     PromptGuard prompt_;
     LocalView local_view_ = LocalView::None;
+    const char *reply_audio_notice_ = nullptr;
     std::string view_prompt_id_;
     unsigned prompt_scroll_ = 0;
     unsigned prompt_selection_ = 0;
@@ -1145,6 +1191,7 @@ private:
     size_t usb_line_size_ = 0;
     bool usb_discard_line_ = false;
     bool answer_view_ = false;
+    bool action_menu_online_ = false;
     bool prompt_arming_notice_ = false;
     bool display_suppressed_ = false;
     bool mic_capture_active_ = false;

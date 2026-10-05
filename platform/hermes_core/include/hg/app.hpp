@@ -68,6 +68,10 @@ class App {
   void begin();
   void tick();
 
+  // Local output preference; does not change microphone input or gateway state.
+  void set_voice_replies_enabled(bool enabled);
+  bool voice_replies_enabled() const { return voice_replies_enabled_; }
+
   // --- events from the port -------------------------------------------------
   void on_network(bool up, std::string_view detail = {});
   void on_transport_open();
@@ -203,6 +207,7 @@ class App {
   std::string access_token_;
   TalkMode talk_mode_ = TalkMode::Hold;
   uint8_t volume_ = 70;
+  bool voice_replies_enabled_ = true;
 
   // connection
   Phase phase_ = Phase::Boot;

@@ -26,6 +26,7 @@ dependencies:
 direct_dependencies:
 - espressif/esp_codec_dev
 - espressif/esp_websocket_client
-manifest_hash: 1e048ac2a0cbdcc6c624d2ae23f57b55ae3fb6d1aee0e6446e359da1c29f2ae8
+- idf
+manifest_hash: a506c3869b1a567c37cf5c9d27987cfe33dee10fd0356ae708f6d2cb3fbdd11a
 target: esp32s3
 version: 3.0.0
