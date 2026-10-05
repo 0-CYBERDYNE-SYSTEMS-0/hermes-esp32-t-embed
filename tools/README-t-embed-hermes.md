@@ -118,13 +118,17 @@ The Hermes speaker output is I2S for a MAX98357A amplifier: T-Embed GPIO7 is BCL
 
 ## Knob controls
 
-- In the one-entry launcher, click Hermes to open it.
+- In the launcher, rotate to Hermes and click to open it.
 - In Hermes Ready or while viewing a reply, hold the knob for about 300 ms to start push-to-talk. Wait for **Listening**, speak, then release to send.
 - While Thinking or Speaking, a hold cancels the active turn and begins a new recording. A short click opens the action menu.
 - While Listening, turn the knob to cancel/discard the recording; the release is consumed and does not send it.
-- In the action menu, rotate to select and click to activate. When Hermes is online and paired, it offers Cancel Turn, New Conversation, Volume, Wi-Fi Network, Home, and Back. Back is the default selection. New Conversation requires a second confirmation, defaulting to No; Home is an explicit selection.
+- In the action menu, rotate to select and click to activate. When Hermes is online and paired, it offers Cancel Turn, New Conversation, Reply Audio, Wi-Fi Network, Home, and Back. Back is the default selection. New Conversation requires a second confirmation, defaulting to No; Home is an explicit selection.
+- Open **Reply Audio**, then click **Voice replies: On/Off** to toggle spoken output. Off stops current playback while the answer continues as text. Microphone input still works. **TEXT** appears in the title bar, and the preference survives restart. Volume is a separate entry inside Reply Audio; changing it does not turn voice replies on. On allows subsequent audio streams, including a later segment of an answer already in progress; discarded audio is not replayed.
+- Replies wrap to the landscape screen width. Turn counterclockwise to read earlier lines and clockwise for later lines. Incoming text preserves a manually selected position, and completed replies stay visible. This scrolls the current reply only; starting another recording or New Conversation clears it. There is no horizontal scrolling or saved reply history.
 - For an approval prompt, rotate to read/scroll the prompt, then click to open the answer view. It defaults to Deny. Rotate to choose, then make a fresh click after the 600 ms arming window to send the correlated answer. A held press cannot approve a prompt, and approval never uses voice capture.
-- While offline or pairing, recording is disabled. The menu offers Home, Wi-Fi Network, and Back.
+- While offline or pairing, recording is disabled. The menu offers Home, Wi-Fi Network, Reply Audio, and Back, so you can select silence before connecting.
+
+Voice replies default to On when no preference has been saved. If the preference cannot be read, Hermes selects Off and shows **VOICE SETTING ERROR** in Reply Audio. **SETTING NOT SAVED** means the requested mode is active for this session but may not survive restart. Local muting does not disable gateway TTS generation or reduce its network traffic. Quiet speech recognition still depends on the microphone and gateway transcription.
 
 ## Build and validation
 

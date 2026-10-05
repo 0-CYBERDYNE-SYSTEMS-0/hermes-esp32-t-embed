@@ -9,3 +9,7 @@ The imported source closure is `app.cpp`, `canvas.cpp`, `crypto.cpp`,
 `ui.cpp`, and `vad.cpp`, with the required headers from `include/hg/`. The
 upstream MIT license is preserved in `LICENSE`; `mascot_data.cpp` also contains
 Hermes Agent mascot artwork, whose attribution is preserved in `NOTICE`.
+
+Local changes add a device-side voice-reply playback switch. Profiles with scroll
+controls retain reply text and manual scroll positions instead of automatically
+paging or hiding replies. Text still uses the upstream wrapping and renderer.
