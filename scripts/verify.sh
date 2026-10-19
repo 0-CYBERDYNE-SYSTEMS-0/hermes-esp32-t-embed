@@ -4,11 +4,23 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
 step(){ printf "\033[1;34m== %s\033[0m\n" "$1"; }
-rc(){ if [ "$1" -ne 0 ]; then printf "\033[1;31mFAIL %s\033[0m\n" "$2"; return 1; fi; printf "\033[1;32mok: %s\033[0m\n" "$2"; }
+rc(){
+  if [ "$1" -ne 0 ]; then
+    printf "\033[1;31mFAIL %s\033[0m\n" "$2"
+    fail=1
+  else
+    printf "\033[1;32mok: %s\033[0m\n" "$2"
+  fi
+}
 
 step "git sanity"
 git fsck --no-progress >/dev/null 2>&1; rc $? "git fsck"
-[ -z "$(git status --porcelain 2>/dev/null | tr -d ' \n')" ] && echo "ok: clean tree" || echo "warn: dirty tree (not a failure)"
+if tree_status=$(git status --porcelain 2>/dev/null); then
+  [ -z "$tree_status" ] && echo "ok: clean tree" || echo "warn: dirty tree (not a failure)"
+else
+  echo "FAIL git status"
+  fail=1
+fi
 
 if ls package.json >/dev/null 2>&1; then
   step "node"
