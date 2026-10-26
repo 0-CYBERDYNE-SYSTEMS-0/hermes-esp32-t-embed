@@ -920,7 +920,8 @@ static void draw_launcher_row(unsigned y, unsigned selection) {
     const unsigned last_y[] = { 69u, 103u, 137u };
     const char *labels[] = { "ESP-SDR", "USB MICROPHONE", "HERMES" };
     unsigned selected = selection % 3u;
-    for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_BG);
+    /* The caller fills every scanline before the band drawing below; a full-row
+     * fill here would erase the header band, title, subtitle, and grid line. */
     for (unsigned i = 0; i < 3u; i++) {
         if (y >= first_y[i] && y < last_y[i]) {
             for (unsigned x = 20; x < LCD_W - 20u; x++)

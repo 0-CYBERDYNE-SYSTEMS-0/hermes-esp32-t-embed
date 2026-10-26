@@ -442,7 +442,9 @@ static struct {
     uint32_t blk_at;
     /* frame emission in progress (has priority over new accumulation) */
     bool emitting;
-    int64_t last_ok;  /* last frame accepted by the output queue */
+    volatile uint32_t last_ok;  /* last frame accepted by the output queue;
+                                 * 32-bit truncated µs: written by both cores,
+                                 * a single aligned word is tear-free on Xtensa */
     unsigned emit_pos;
     uint32_t emit_crc;
     int32_t emit_off_q4; /* mean: 16*6.0206*log2(ffts), max-hold: 0 */
@@ -500,8 +502,12 @@ IRAM_ATTR static void stats_maybe(bool core1_side) {
         return;
     }
     uint32_t dt = now - sx.t0;
-    if (dt < 60000000u) return; /* 250 ms at 240 MHz */
-    uint32_t per_mille = dt / 1000u, ms = dt / 240000u;
+    /* The stats window is 250 ms of cycles; both this gate and the ms
+     * conversion must track CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ like the rest
+     * of the file (a hard 240 MHz assumption inflates ffts_per_s otherwise). */
+    uint32_t cycles_per_us = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+    if (dt < 250000u * cycles_per_us) return;
+    uint32_t per_mille = dt / 1000u, ms = dt / (1000u * cycles_per_us);
     uint32_t c0 = ld.c0_busy, c1 = ld.c1_busy;
     ring_result_t *r = st.res;
     uint32_t df = r->ffts - sx.ffts, dp = sx.pairs_done - sx.pairs;
@@ -602,11 +608,11 @@ RING_HOT static void emit_chunk(void) {
     ring_result_t *r = st.res;
     if (st.cfg->local_output) {
         local_spectrum_publish(spec_n);
-        st.last_ok = esp_timer_get_time();
+        st.last_ok = (uint32_t)esp_timer_get_time();
         r->frames++;
         st.dropped = false;
     } else if (txq_push(frame_out, len + 4)) {
-        st.last_ok = esp_timer_get_time();
+        st.last_ok = (uint32_t)esp_timer_get_time();
         r->frames++;
         st.dropped = false;
     } else {
@@ -796,7 +802,7 @@ IRAM_ATTR static void c1_encode_step(void) {
     for (unsigned i = 0; i < 4; i++) frame_out[len + i] = (uint8_t)(crc >> (8u * i));
     if (st.cfg->local_output) {
         local_spectrum_publish(spec_n);
-        st.last_ok = esp_timer_get_time();
+        st.last_ok = (uint32_t)esp_timer_get_time();
         r->frames++;
         st.dropped = false;
     } else if (c1_txq_push(frame_out, len + 4)) {
@@ -1085,7 +1091,7 @@ static void live_ring_run(const ring_config_t *cfg, ring_result_t *r) {
     REG_WRITE(DUMP_CTRL_REG,DUMP_CTRL_CIRCULAR|DUMP_CTRL_RUN);
     unsigned previous=REG_READ(DUMP_WRITE_INDEX_REG)&RING_MASK;
     uint64_t total=0;
-    int64_t start=esp_timer_get_time(),last_poll=start,last_yield=start;st.last_ok=start;
+    int64_t start=esp_timer_get_time(),last_poll=start,last_yield=start;st.last_ok=(uint32_t)start;
     for(;;) {
         /* Only the sample copy is critical. Interrupts and the scheduler run
          * throughout the FFT, preserving both watchdog protections. */
@@ -1109,7 +1115,7 @@ static void live_ring_run(const ring_config_t *cfg, ring_result_t *r) {
         portCLEAR_INTERRUPT_MASK_FROM_ISR(irq);
         if(r->status || (cfg->duration_ms && now-start >= (int64_t)cfg->duration_ms*1000))break;
         if(burst_serial_stop_requested()){r->stopped_by_host=true;break;}
-        if(!cfg->duration_ms && now-st.last_ok>2000000){r->stopped_by_host=true;break;}
+        if(!cfg->duration_ms && (uint32_t)now-st.last_ok>2000000u){r->stopped_by_host=true;break;}
         scalar_work();txq_pump();
         if(now-last_yield>=10000){vTaskDelay(1);last_yield=now;}
     }
@@ -1237,7 +1243,7 @@ RING_HOT void ring_capture_run(const ring_config_t *cfg, ring_result_t *r) {
     REG_WRITE(DUMP_CTRL_REG, ctrl);
     select_banks(bank_sel_saved,1u);
     int64_t t_start = esp_timer_get_time();
-    st.last_ok = t_start;
+    st.last_ok = (uint32_t)t_start;
     REG_WRITE(DUMP_CTRL_REG, ctrl | DUMP_CTRL_RUN);
     uint32_t epoch = esp_cpu_get_cycle_count();
     const uint32_t w0 = REG_READ(DUMP_WRITE_INDEX_REG) & RING_MASK;
@@ -1285,10 +1291,10 @@ RING_HOT void ring_capture_run(const ring_config_t *cfg, ring_result_t *r) {
 #if CONFIG_IDF_TARGET_ESP32S3
                 if (dual && txq_tail != tail_seen) { /* core 0 sees the host reading */
                     tail_seen = txq_tail;
-                    st.last_ok = esp_timer_get_time();
+                    st.last_ok = (uint32_t)esp_timer_get_time();
                 }
 #endif
-                if (!stop && spec && !duration_us && esp_timer_get_time() - st.last_ok > 2000000) {
+                if (!stop && spec && !duration_us && (uint32_t)esp_timer_get_time() - st.last_ok > 2000000u) {
                     stop = true;
                     r->stopped_by_host = true;
                 }

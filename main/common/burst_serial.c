@@ -169,7 +169,9 @@ static int64_t transfer_deadline(size_t size) {
      * including full frames at a deliberately reduced UART baud rate. */
     int64_t timeout = active_port == BURST_SERIAL_UART
         ? 2000000 + (int64_t)size * 10000000 / uart_baud
-        : 3000000;
+        : 3000000 + (int64_t)size * 16; /* USB: keep a ~62.5 KB/s floor so a
+                                         * stalled host cannot expire mid-frame
+                                         * and desync the binary payload */
     return esp_timer_get_time() + timeout;
 }
 
