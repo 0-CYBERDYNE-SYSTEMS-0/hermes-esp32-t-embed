@@ -73,13 +73,14 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload build diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: diagnostics-${{ matrix.id }}
           path: |
             build-${{ matrix.id }}/log/
             build-${{ matrix.id }}/sdkconfig
+            build-${{ matrix.id }}/*.map
           retention-days: 7
 
   bundle:
