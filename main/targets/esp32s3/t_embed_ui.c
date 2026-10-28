@@ -1113,7 +1113,8 @@ static void draw_hunt_screen(void) {
         for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, bg);
         if (y == 24u) for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_GRID);
         put_text_scanline(8, 8, y, "HUNT", COLOR_ACCENT);
-        put_text_scanline(216, 8, y, "2.4 GHZ ONLY", COLOR_DIM);
+        snprintf(buf, sizeof(buf), "%u MHZ", stats.frequency_mhz);
+        put_text_scanline(240, 8, y, buf, COLOR_TEXT);
         /* verdict */
         put_text_scanline_scaled(8, 28, y, hunt_level_word(hunt.verdict),
                                  hunt_level_color(hunt.verdict), 2);
@@ -1175,8 +1176,7 @@ static void draw_hunt_screen(void) {
         /* footer */
         if (y >= 150u) {
             for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
-            put_text_scanline(8, 155, y, "PRESS FLAG", COLOR_TEXT);
-            put_text_scanline(98, 155, y, "HOLD BASELINE", COLOR_TEXT);
+            put_text_scanline(8, 155, y, "TURN TUNE PRESS VIEW HOLD MENU", COLOR_DIM);
             put_text_scanline(230, 155, y, hunt.baseline_valid ? "BASE ON" : "BASE OFF",
                               hunt.baseline_valid ? COLOR_GREEN : COLOR_DIM);
         }
@@ -1200,8 +1200,8 @@ static void draw_compare_screen(void) {
         for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, y < 25u ? COLOR_HEADER : COLOR_BG);
         if (y == 24u) for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_GRID);
         put_text_scanline(8, 8, y, "COMPARE", COLOR_ACCENT);
-        put_text_scanline(196, 8, y, hunt.baseline_valid ? "BASELINE SAVED" : "NO BASELINE",
-                          hunt.baseline_valid ? COLOR_GREEN : COLOR_DIM);
+        snprintf(buf, sizeof(buf), "%u MHZ", stats.frequency_mhz);
+        put_text_scanline(240, 8, y, buf, COLOR_TEXT);
         for (unsigned i = 0; i < n && i < 6u; i++) {
             const threat_track_t *t = &hunt.track[order[i]];
             unsigned top = 32u + i * 20u;
@@ -1232,7 +1232,9 @@ static void draw_compare_screen(void) {
         if (!n) put_text_scanline(8, 40, y, "NO SIGNALS TRACKED", COLOR_DIM);
         if (y >= 150u) {
             for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
-            put_text_scanline(8, 155, y, "NEW SIGNALS APPEARED SINCE BASELINE", COLOR_TEXT);
+            put_text_scanline(8, 155, y, "NEW SIGNALS IN RED HOLD MENU FOR BASE", COLOR_TEXT);
+            put_text_scanline(230, 155, y, hunt.baseline_valid ? "BASE ON" : "BASE OFF",
+                              hunt.baseline_valid ? COLOR_GREEN : COLOR_DIM);
         }
         record_ui_result(draw_row(y, line));
     }
@@ -1244,8 +1246,8 @@ static void draw_log_screen(void) {
         for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, y < 25u ? COLOR_HEADER : COLOR_BG);
         if (y == 24u) for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_GRID);
         put_text_scanline(8, 8, y, "FLAG LOG", COLOR_ACCENT);
-        snprintf(buf, sizeof(buf), "%u EVENTS", hunt_log_n);
-        put_text_scanline(248, 8, y, buf, COLOR_DIM);
+        snprintf(buf, sizeof(buf), "%u MHZ", stats.frequency_mhz);
+        put_text_scanline(240, 8, y, buf, COLOR_TEXT);
         for (unsigned i = 0; i < hunt_log_n && i < 6u; i++) {
             const hunt_log_event_t *e = &hunt_log[hunt_log_n - 1u - i];
             unsigned top = 32u + i * 19u;
@@ -1269,7 +1271,8 @@ static void draw_log_screen(void) {
         if (!hunt_log_n) put_text_scanline(8, 40, y, "NO FLAGS YET", COLOR_DIM);
         if (y >= 150u) {
             for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
-            put_text_scanline(8, 155, y, "FLAGS ARE ALSO EXPORTABLE OVER USB", COLOR_TEXT);
+            snprintf(buf, sizeof(buf), "%u EVENTS USB EXPORT", hunt_log_n);
+            put_text_scanline(8, 155, y, buf, COLOR_TEXT);
         }
         record_ui_result(draw_row(y, line));
     }
@@ -1419,7 +1422,7 @@ static void sdr_render_menu(void) {
         t_embed_ui_render_menu_overlay("BASELINE", base, 3u,
                                        sdr_base_selection, "TURN SELECT PRESS SET");
     } else {
-        static const char *const items[] = { "PAUSE / RESUME", "SPAN", "VIEW",
+        static const char *const items[] = { "PAUSE / RESUME", "SPAN", "STEP",
                                              "BASELINE", "HOME", "BACK" };
         t_embed_ui_render_menu_overlay("SDR MENU", items, 6u,
                                        sdr_menu_selection, "TURN SELECT PRESS OPEN");
@@ -1473,11 +1476,7 @@ bool t_embed_ui_poll_controls(unsigned *frequency_mhz) {
                 sdr_span_menu_active = true;
                 sdr_span_selection = rate_code == 6u ? 0u : rate_code == 1u ? 1u : 2u;
             } else if (sdr_menu_selection == 2u) {
-                hunt_screen = (hunt_screen + 1u) % 4u;
-                sdr_menu_active = false;
-                view_valid = false;
-                hunt_changed_seen = ~hunt.changed;
-                t_embed_ui_invalidate_overlays();
+                cycle_step();
                 changed = true;
             } else if (sdr_menu_selection == 3u) {
                 sdr_base_menu_active = true;
@@ -1517,7 +1516,11 @@ bool t_embed_ui_poll_controls(unsigned *frequency_mhz) {
         }
     }
     if (event.short_click && event.press_context == T_EMBED_INPUT_SDR) {
-        cycle_step();
+        /* one press flips the view: HUNT -> COMPARE -> SPECTRUM -> LOG */
+        hunt_screen = (hunt_screen + 1u) % 4u;
+        view_valid = false;
+        hunt_changed_seen = ~hunt.changed;
+        t_embed_ui_invalidate_overlays();
         changed = true;
     }
     if (event.hold && event.press_context == T_EMBED_INPUT_SDR) {
