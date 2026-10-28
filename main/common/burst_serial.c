@@ -118,12 +118,17 @@ static int read_port(burst_serial_port_t port, void *buffer, size_t size) {
 #endif
 }
 
+static uint8_t stop_tail_pending[BURST_SERIAL_COUNT];
+
 bool burst_serial_stop_requested(void) {
-    char c; bool stopped=false;
+    char c = 0; bool stopped=false;
     for(unsigned j=0;j<128 && read_port(active_port,&c,1)==1;j++) {
         stopped=true;
         if(c=='\n') break;
     }
+    /* A stop request can straddle polls; swallow its tail so the leftover
+     * fragment cannot later parse as a bogus command line. */
+    if(stopped && c!='\n') stop_tail_pending[active_port]=1;
     return stopped;
 }
 
@@ -140,6 +145,10 @@ int burst_serial_poll_line(char *line, size_t capacity) {
             char ch;
             if (read_port(port, &ch, 1) != 1) break;
             input[port].last_byte = now;
+            if (stop_tail_pending[port]) {
+                if (ch == '\n') stop_tail_pending[port] = 0;
+                continue;
+            }
             if (ch == '\r') continue;
             if (ch != '\n') {
                 if (input[port].used < COMMAND_SIZE - 1)

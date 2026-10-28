@@ -303,6 +303,28 @@ static void handle_command(char *line) {
         reply(answer);
         return;
     }
+    if (!strcmp(line, "HUNT?")) {
+        static char hunt_json[768];
+        t_embed_ui_hunt_json(hunt_json, sizeof(hunt_json));
+        reply(hunt_json);
+        reply("\n");
+        return;
+    }
+    if (!strcmp(line, "LOG?")) {
+        static char log_json[768];
+        t_embed_ui_log_json(log_json, sizeof(log_json));
+        reply(log_json);
+        reply("\n");
+        return;
+    }
+    if (!strcmp(line, "BASELINE SAVE")) {
+        reply(t_embed_ui_baseline_save() ? "OK\n" : "ERR save\n");
+        return;
+    }
+    if (!strcmp(line, "BASELINE CLEAR")) {
+        reply(t_embed_ui_baseline_clear() ? "OK\n" : "ERR clear\n");
+        return;
+    }
 #endif
     if(!strcmp(line,"TRANSPORT?")) {
         char answer[64];

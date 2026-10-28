@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "ring_capture.h"
@@ -94,6 +95,11 @@ void t_embed_ui_note_capture(const ring_result_t *result, unsigned nfft,
 void t_embed_ui_render_view(const t_embed_ui_view_t *view);
 void t_embed_ui_render_spectrum(const uint8_t *bins, unsigned nfft);
 void t_embed_ui_get_stats(t_embed_ui_stats_t *stats);
+/* Tracker-hunt triage: JSON snapshots for the serial CLI, baseline control. */
+void t_embed_ui_hunt_json(char *out, size_t cap);
+void t_embed_ui_log_json(char *out, size_t cap);
+bool t_embed_ui_baseline_save(void);
+bool t_embed_ui_baseline_clear(void);
 
 #ifdef __cplusplus
 }
