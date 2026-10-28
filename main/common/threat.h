@@ -170,6 +170,8 @@ static inline void threat_observe(threat_state_t *s, const uint8_t *bins,
     for (unsigned k = 1; k + 1u < nfft; k++) {
         int16_t v = bins[k];
         if (v < gate || v <= bins[k - 1u] || v <= bins[k + 1u]) continue;
+        /* the tuned center always leaks mixer DC; it is not an emitter */
+        if (k + 2u >= nfft / 2u && k <= nfft / 2u + 2u) continue;
         unsigned khz = center_khz + (unsigned)(((int)k - (int)(nfft / 2u)) *
                                                (int)span_khz / (int)nfft);
         /* match an existing track (or a restored baseline-only slot) in range */
@@ -196,11 +198,11 @@ static inline void threat_observe(threat_state_t *s, const uint8_t *bins,
             t->khz = khz;
             t->win_n = 1;
         }
-        if (t->seen_n < 255u) t->seen_n++;
         if (v > t->code_max) t->code_max = v;
         if (t->last_seen_ms != now_ms) {
             threat_track_arrival(t, now_ms);
             t->last_seen_ms = now_ms;
+            if (t->seen_n < 255u) t->seen_n++; /* one presence per frame */
         }
     }
     /* derive per-track verdicts */
@@ -208,7 +210,10 @@ static inline void threat_observe(threat_state_t *s, const uint8_t *bins,
     for (unsigned i = 0; i < THREAT_TRACKED; i++) {
         threat_track_t *t = &s->track[i];
         if (!t->used) continue;
-        if (t->win_n) t->duty_pct = (uint8_t)((unsigned)t->seen_n * 100u / t->win_n);
+        if (t->win_n) {
+            unsigned duty = (unsigned)t->seen_n * 100u / t->win_n;
+            t->duty_pct = duty > 100u ? 100u : (uint8_t)duty;
+        }
         uint8_t level = threat_level_of(t, s->floor_code, s->frames,
                                         s->baseline_valid != 0);
         if (level != t->level) s->changed++;

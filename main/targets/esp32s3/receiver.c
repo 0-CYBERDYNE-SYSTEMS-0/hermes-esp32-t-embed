@@ -304,14 +304,14 @@ static void handle_command(char *line) {
         return;
     }
     if (!strcmp(line, "HUNT?")) {
-        static char hunt_json[768];
+        static char hunt_json[1536];
         t_embed_ui_hunt_json(hunt_json, sizeof(hunt_json));
         reply(hunt_json);
         reply("\n");
         return;
     }
     if (!strcmp(line, "LOG?")) {
-        static char log_json[768];
+        static char log_json[1024];
         t_embed_ui_log_json(log_json, sizeof(log_json));
         reply(log_json);
         reply("\n");

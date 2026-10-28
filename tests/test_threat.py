@@ -52,7 +52,7 @@ int main(void) {
         unsigned t = 0;
         for (unsigned i = 0; i < 8u; i++) {
             while (t < burst_ms[i]) { step(-1, 0, t); t += 100u; }
-            step(128, 175, burst_ms[i]);
+            step(100, 175, burst_ms[i]);
             t = burst_ms[i] + 100u;
         }
         for (unsigned i = 0; i < 5u; i++) { step(-1, 0, t); t += 100u; }
@@ -69,7 +69,7 @@ int main(void) {
         unsigned t = 0;
         for (unsigned i = 0; i < 8u; i++) {
             while (t < times[i]) { step(-1, 0, t); t += 100u; }
-            step(128, 145, times[i]); t = times[i] + 100u;
+            step(100, 145, times[i]); t = times[i] + 100u;
         }
         for (unsigned i = 0; i < 20u; i++) { step(-1, 0, t); t += 100u; }
     }
@@ -111,6 +111,27 @@ int main(void) {
     assert(s.baseline_valid == 0u);
     assert(!(s.track[0].reason & THREAT_REASON_NEW));
     printf("no-baseline ok\n");
+
+    /* 7: two peaks matching one track in a single frame never exceed 100% duty */
+    threat_init(&s);
+    for (unsigned i = 0; i < 40u; i++) {
+        memset(bins, 120, sizeof(bins));
+        bins[100] = 200; bins[99] = 190; bins[101] = 190;
+        bins[120] = 195; bins[119] = 185; bins[121] = 185; /* within 2 MHz */
+        threat_observe(&s, bins, 256, 2437000u, 16000u, i * 100u);
+    }
+    assert(s.track[0].used);
+    assert(s.track[0].duty_pct <= 100u);
+    printf("duty-cap ok\n");
+
+    /* 8: the tuned center (mixer DC leak) is never tracked */
+    threat_init(&s);
+    for (unsigned i = 0; i < 40u; i++) step(128, 250, i * 100u);
+    {   int used = 0;
+        for (unsigned i = 0; i < THREAT_TRACKED; i++) used += s.track[i].used;
+        assert(used == 0);
+    }
+    printf("center-exclusion ok\n");
 
     printf("ALL PASS\n");
     return 0;
