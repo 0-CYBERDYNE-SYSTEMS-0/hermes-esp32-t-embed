@@ -133,6 +133,19 @@ int main(void) {
     }
     printf("center-exclusion ok\n");
 
+    /* 9: flag-log ring keeps the newest 12 in order, never a zero entry */
+    {   static threat_log_t log;
+        memset(&log, 0, sizeof(log));
+        for (unsigned i = 0; i < 15u; i++)
+            threat_log_push(&log, 100u + i, 2434000u + i, THREAT_LEVEL_WATCH, 1u);
+        assert(log.n == THREAT_LOG_CAP);
+        assert(log.ev[0].t_s == 103u);              /* oldest surviving = push 4 */
+        assert(log.ev[THREAT_LOG_CAP - 1u].t_s == 114u);
+        for (unsigned i = 0; i < THREAT_LOG_CAP; i++)
+            assert(log.ev[i].khz != 0u);            /* no holes in the ring */
+        printf("log-ring ok\n");
+    }
+
     printf("ALL PASS\n");
     return 0;
 }

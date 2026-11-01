@@ -139,25 +139,21 @@ static const waterfall_color_stop_t WATERFALL_COLORS[] = {
 #define HUNT_NVS_NS "hunt"
 
 typedef struct {
-    uint32_t t_s;
-    uint32_t khz;
-    uint8_t level;
-    uint8_t reason;
-} hunt_log_event_t;
-
-typedef struct {
     uint32_t khz;
     int16_t code;
     int16_t pad;
 } hunt_base_slot_t;
 
+#define HUNT_AUTO_BASE_FRAMES 120u /* ~12 s of captures = default baseline */
+
 static threat_state_t hunt;
+static threat_log_t hunt_log;
 static unsigned hunt_screen = HUNT_SCREEN_HUNT;
 static uint32_t hunt_changed_seen;
 static uint32_t hunt_last_draw_us;
 static uint8_t hunt_logged_level[THREAT_TRACKED];
-static hunt_log_event_t hunt_log[HUNT_LOG_CAP];
-static unsigned hunt_log_n;
+static bool hunt_base_suppressed; /* explicit CLEAR ends auto-baselining */
+static bool hunt_base_auto;       /* the current baseline was auto-recorded */
 static volatile uint32_t key_latch;
 
 static void IRAM_ATTR hunt_key_isr(void *arg) {
@@ -165,15 +161,9 @@ static void IRAM_ATTR hunt_key_isr(void *arg) {
     if (gpio_get_level(PIN_ENCODER_KEY) == 0) key_latch = 1u;
 }
 
-static void hunt_log_push(uint32_t khz, uint8_t level, uint8_t reason) {
-    unsigned slot = hunt_log_n < HUNT_LOG_CAP ? hunt_log_n++ : HUNT_LOG_CAP - 1u;
-    if (hunt_log_n >= HUNT_LOG_CAP) {
-        memmove(&hunt_log[0], &hunt_log[1], sizeof(hunt_log) - sizeof(hunt_log[0]));
-    }
-    hunt_log[slot].t_s = (uint32_t)(esp_timer_get_time() / 1000000);
-    hunt_log[slot].khz = khz;
-    hunt_log[slot].level = level;
-    hunt_log[slot].reason = reason;
+static void hunt_log_add(uint32_t khz, uint8_t level, uint8_t reason) {
+    threat_log_push(&hunt_log, (uint32_t)(esp_timer_get_time() / 1000000),
+                    khz, level, reason);
 }
 
 static void hunt_nvs_save_baseline(void) {
@@ -1106,7 +1096,27 @@ static void hunt_reason_text(const threat_track_t *t, char *out, size_t cap) {
 }
 
 static void draw_hunt_screen(void) {
-    const threat_track_t *top = hunt_top_track();
+    /* Once a baseline exists the verdict is RELATIVE to it: the screen answers
+     * "anything new?" instead of re-flagging the known world every refresh. */
+    unsigned new_n = 0, tracked_n = 0;
+    uint8_t new_level = 0;
+    const threat_track_t *new_top = NULL;
+    for (unsigned i = 0; i < THREAT_TRACKED; i++) {
+        const threat_track_t *t = &hunt.track[i];
+        if (!t->used) continue;
+        tracked_n++;
+        if (!(t->reason & THREAT_REASON_NEW)) continue;
+        new_n++;
+        if (t->level > new_level) new_level = t->level;
+        if (!new_top || t->level > new_top->level ||
+            (t->level == new_top->level && t->code_max > new_top->code_max))
+            new_top = t;
+    }
+    bool rel = hunt.baseline_valid != 0;
+    uint8_t shown = rel ? (new_n ? new_level : THREAT_LEVEL_AMBIENT) : hunt.verdict;
+    const threat_track_t *top = rel && new_top ? new_top : hunt_top_track();
+    uint16_t top_color = (rel && top && !(top->reason & THREAT_REASON_NEW))
+                             ? COLOR_DIM : hunt_level_color(shown);
     char buf[40];
     for (unsigned y = 0; y < LCD_H; y++) {
         uint16_t bg = y < 25u ? COLOR_HEADER : COLOR_BG;
@@ -1116,19 +1126,33 @@ static void draw_hunt_screen(void) {
         snprintf(buf, sizeof(buf), "%u MHZ", stats.frequency_mhz);
         put_text_scanline(240, 8, y, buf, COLOR_TEXT);
         /* verdict */
-        put_text_scanline_scaled(8, 28, y, hunt_level_word(hunt.verdict),
-                                 hunt_level_color(hunt.verdict), 2);
-        snprintf(buf, sizeof(buf), "C%u W%u P%u", hunt.concern_n, hunt.watch_n,
-                 hunt.periodic_n);
-        put_text_scanline(190, 32, y, buf, COLOR_DIM);
+        if (rel && !new_n) {
+            put_text_scanline_scaled(8, 28, y, "CLEAR", COLOR_GREEN, 2);
+            put_text_scanline(130, 32, y, "NOTHING NEW SINCE BASELINE", COLOR_GREEN);
+        } else {
+            put_text_scanline_scaled(8, 28, y, hunt_level_word(shown),
+                                     hunt_level_color(shown), 2);
+            if (rel) {
+                snprintf(buf, sizeof(buf), "%u NEW OF %u TRACKED", new_n, tracked_n);
+                put_text_scanline(190, 32, y, buf, hunt_level_color(shown));
+            } else if (hunt.frames < HUNT_AUTO_BASE_FRAMES) {
+                snprintf(buf, sizeof(buf), "BASE IN %us",
+                         (unsigned)((HUNT_AUTO_BASE_FRAMES - hunt.frames) / 10u));
+                put_text_scanline(190, 32, y, buf, COLOR_AMBER);
+            } else {
+                snprintf(buf, sizeof(buf), "C%u W%u P%u", hunt.concern_n,
+                         hunt.watch_n, hunt.periodic_n);
+                put_text_scanline(190, 32, y, buf, COLOR_DIM);
+            }
+        }
         /* meter */
         if (y >= 56u && y < 66u) {
             for (unsigned x = 8u; x < 312u; x++) {
                 uint16_t seg = x < 109u ? COLOR_GREEN : x < 210u ? COLOR_AMBER : COLOR_RED;
                 pixel_be(line + 2u * x, seg);
             }
-            unsigned needle = hunt.verdict >= THREAT_LEVEL_CONCERN ? 264u
-                            : hunt.verdict >= THREAT_LEVEL_WATCH ? 164u : 64u;
+            unsigned needle = shown >= THREAT_LEVEL_CONCERN ? 264u
+                            : shown >= THREAT_LEVEL_WATCH ? 164u : 64u;
             for (unsigned x = needle - 1u; x <= needle + 1u; x++)
                 pixel_be(line + 2u * x, COLOR_TEXT);
         }
@@ -1140,18 +1164,18 @@ static void draw_hunt_screen(void) {
             for (unsigned x = 8u; x < 312u; x++)
                 pixel_be(line + 2u * x, y == 82u || y == 121u ? COLOR_GRID : COLOR_HEADER);
         }
-        put_text_scanline(14, 87, y, "TOP SIGNAL", COLOR_DIM);
+        put_text_scanline(14, 87, y, rel ? (new_top ? "NEW SIGNAL" : "TOP KNOWN") : "TOP SIGNAL",
+                          new_top ? COLOR_RED : COLOR_DIM);
         if (top) {
             snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(top->khz / 1000u),
                      (unsigned long)(top->khz % 1000u));
-            put_text_scanline_scaled(14, 95, y, buf, hunt_level_color(top->level), 2);
+            put_text_scanline_scaled(14, 95, y, buf, top_color, 2);
             put_text_scanline(14, 113, y, "MHZ", COLOR_DIM);
-            put_text_scanline(52, 113, y, hunt_level_word(top->level),
-                              hunt_level_color(top->level));
+            put_text_scanline(52, 113, y, hunt_level_word(top->level), top_color);
             snprintf(buf, sizeof(buf), "DUTY %u%%", top->duty_pct);
             put_text_scanline(130, 113, y, buf, COLOR_DIM);
             hunt_reason_text(top, buf, sizeof(buf));
-            put_text_scanline(216, 113, y, buf, hunt_level_color(top->level));
+            put_text_scanline(216, 113, y, buf, top_color);
             put_text_scanline_scaled(150, 95, y, top->duty_pct >= 80u ? "FOLLOWS?"
                                      : top->periodic ? "BEACON" : "",
                                      COLOR_DIM, 2);
@@ -1177,7 +1201,9 @@ static void draw_hunt_screen(void) {
         if (y >= 150u) {
             for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
             put_text_scanline(8, 155, y, "TURN TUNE PRESS VIEW HOLD MENU", COLOR_DIM);
-            put_text_scanline(230, 155, y, hunt.baseline_valid ? "BASE ON" : "BASE OFF",
+            put_text_scanline(222, 155, y,
+                              !hunt.baseline_valid ? "BASE OFF"
+                              : hunt_base_auto ? "BASE AUTO" : "BASE SET",
                               hunt.baseline_valid ? COLOR_GREEN : COLOR_DIM);
         }
         record_ui_result(draw_row(y, line));
@@ -1186,10 +1212,12 @@ static void draw_hunt_screen(void) {
 
 static void draw_compare_screen(void) {
     char buf[40];
-    unsigned order[THREAT_TRACKED], n = 0;
+    unsigned order[THREAT_TRACKED], n = 0, cmp_new = 0, cmp_known = 0;
     for (unsigned i = 0; i < THREAT_TRACKED; i++) {
         if (!hunt.track[i].used) continue;
         order[n++] = i;
+        if (hunt.track[i].reason & THREAT_REASON_NEW) cmp_new++;
+        else cmp_known++;
     }
     for (unsigned a = 0; a + 1u < n; a++)
         for (unsigned b = a + 1u; b < n; b++)
@@ -1232,8 +1260,11 @@ static void draw_compare_screen(void) {
         if (!n) put_text_scanline(8, 40, y, "NO SIGNALS TRACKED", COLOR_DIM);
         if (y >= 150u) {
             for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
-            put_text_scanline(8, 155, y, "NEW SIGNALS IN RED HOLD MENU FOR BASE", COLOR_TEXT);
-            put_text_scanline(230, 155, y, hunt.baseline_valid ? "BASE ON" : "BASE OFF",
+            snprintf(buf, sizeof(buf), "%u NEW %u KNOWN HOLD MENU=SWEEP", cmp_new, cmp_known);
+            put_text_scanline(8, 155, y, buf, cmp_new ? COLOR_RED : COLOR_TEXT);
+            put_text_scanline(222, 155, y,
+                              !hunt.baseline_valid ? "BASE OFF"
+                              : hunt_base_auto ? "BASE AUTO" : "BASE SET",
                               hunt.baseline_valid ? COLOR_GREEN : COLOR_DIM);
         }
         record_ui_result(draw_row(y, line));
@@ -1248,8 +1279,8 @@ static void draw_log_screen(void) {
         put_text_scanline(8, 8, y, "FLAG LOG", COLOR_ACCENT);
         snprintf(buf, sizeof(buf), "%u MHZ", stats.frequency_mhz);
         put_text_scanline(240, 8, y, buf, COLOR_TEXT);
-        for (unsigned i = 0; i < hunt_log_n && i < 6u; i++) {
-            const hunt_log_event_t *e = &hunt_log[hunt_log_n - 1u - i];
+        for (unsigned i = 0; i < hunt_log.n && i < 6u; i++) {
+            const threat_log_event_t *e = &hunt_log.ev[hunt_log.n - 1u - i];
             unsigned top = 32u + i * 19u;
             if (y > top && y < top + 17u) {
                 for (unsigned x = 8u; x < 14u; x++)
@@ -1268,10 +1299,10 @@ static void draw_log_screen(void) {
                 put_text_scanline(236, top + 4u, y, buf, hunt_level_color(e->level));
             }
         }
-        if (!hunt_log_n) put_text_scanline(8, 40, y, "NO FLAGS YET", COLOR_DIM);
+        if (!hunt_log.n) put_text_scanline(8, 40, y, "NO FLAGS YET", COLOR_DIM);
         if (y >= 150u) {
             for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
-            snprintf(buf, sizeof(buf), "%u EVENTS USB EXPORT", hunt_log_n);
+            snprintf(buf, sizeof(buf), "%u EVENTS USB EXPORT", hunt_log.n);
             put_text_scanline(8, 155, y, buf, COLOR_TEXT);
         }
         record_ui_result(draw_row(y, line));
@@ -1313,8 +1344,8 @@ void t_embed_ui_hunt_json(char *out, size_t cap) {
 void t_embed_ui_log_json(char *out, size_t cap) {
     if (!out || !cap) return;
     int n = snprintf(out, cap, "{\"events\":[");
-    for (unsigned i = 0; i < hunt_log_n && n > 0 && (size_t)n < cap; i++) {
-        const hunt_log_event_t *e = &hunt_log[i];
+    for (unsigned i = 0; i < hunt_log.n && n > 0 && (size_t)n < cap; i++) {
+        const threat_log_event_t *e = &hunt_log.ev[i];
         n += snprintf(out + n, cap - (size_t)n,
             "%s{\"t\":%lu,\"khz\":%lu,\"level\":\"%s\",\"reason\":%u}",
             i ? "," : "", (unsigned long)e->t_s, (unsigned long)e->khz,
@@ -1326,6 +1357,7 @@ void t_embed_ui_log_json(char *out, size_t cap) {
 bool t_embed_ui_baseline_save(void) {
     threat_baseline_save(&hunt);
     hunt_nvs_save_baseline();
+    hunt_base_auto = false;
     hunt_changed_seen = ~hunt.changed;
     return hunt.baseline_valid != 0;
 }
@@ -1333,8 +1365,20 @@ bool t_embed_ui_baseline_save(void) {
 bool t_embed_ui_baseline_clear(void) {
     threat_baseline_clear(&hunt);
     hunt_nvs_save_baseline();
+    hunt_base_suppressed = true;
+    hunt_base_auto = false;
     hunt_changed_seen = ~hunt.changed;
     return true;
+}
+
+void t_embed_ui_sweep_reset(void) {
+    threat_init(&hunt);
+    memset(&hunt_log, 0, sizeof(hunt_log));
+    memset(hunt_logged_level, 0, sizeof(hunt_logged_level));
+    hunt_base_suppressed = false;
+    hunt_base_auto = false;
+    hunt_nvs_save_baseline();
+    hunt_changed_seen = ~hunt.changed;
 }
 
 bool t_embed_ui_poll_launcher(unsigned *selection, bool *activate) {
@@ -1418,12 +1462,13 @@ static void sdr_render_menu(void) {
         t_embed_ui_render_menu_overlay("SELECT SPAN", spans, 3u,
                                        sdr_span_selection, "TURN SELECT PRESS SET");
     } else if (sdr_base_menu_active) {
-        static const char *const base[] = { "SAVE BASELINE", "CLEAR BASELINE", "BACK" };
-        t_embed_ui_render_menu_overlay("BASELINE", base, 3u,
+        static const char *const base[] = { "NEW SWEEP", "SAVE BASELINE",
+                                            "CLEAR BASELINE", "BACK" };
+        t_embed_ui_render_menu_overlay("SWEEP", base, 4u,
                                        sdr_base_selection, "TURN SELECT PRESS SET");
     } else {
         static const char *const items[] = { "PAUSE / RESUME", "SPAN", "STEP",
-                                             "BASELINE", "HOME", "BACK" };
+                                             "SWEEP", "HOME", "BACK" };
         t_embed_ui_render_menu_overlay("SDR MENU", items, 6u,
                                        sdr_menu_selection, "TURN SELECT PRESS OPEN");
     }
@@ -1451,7 +1496,7 @@ bool t_embed_ui_poll_controls(unsigned *frequency_mhz) {
                                                        event.detents, 3u);
             else if (sdr_base_menu_active)
                 sdr_base_selection = t_embed_menu_move(sdr_base_selection,
-                                                       event.detents, 3u);
+                                                       event.detents, 4u);
             else
                 sdr_menu_selection = t_embed_menu_move(sdr_menu_selection,
                                                        event.detents, 6u);
@@ -1464,9 +1509,12 @@ bool t_embed_ui_poll_controls(unsigned *frequency_mhz) {
                 sdr_span_menu_active = false;
                 changed = true;
             } else if (sdr_base_menu_active) {
-                if (sdr_base_selection == 0u) (void)t_embed_ui_baseline_save();
-                else if (sdr_base_selection == 1u) (void)t_embed_ui_baseline_clear();
+                if (sdr_base_selection == 0u) t_embed_ui_sweep_reset();
+                else if (sdr_base_selection == 1u) (void)t_embed_ui_baseline_save();
+                else if (sdr_base_selection == 2u) (void)t_embed_ui_baseline_clear();
                 sdr_base_menu_active = false;
+                view_valid = false;
+                t_embed_ui_invalidate_overlays();
                 changed = true;
             } else if (sdr_menu_selection == 0u) {
                 paused = !paused;
@@ -1611,9 +1659,17 @@ void t_embed_ui_render_spectrum(const uint8_t *bins, unsigned nfft) {
         threat_track_t *t = &hunt.track[i];
         if (!t->used) continue;
         if (t->level > hunt_logged_level[i]) {
-            if (t->level >= THREAT_LEVEL_WATCH) hunt_log_push(t->khz, t->level, t->reason);
+            if (t->level >= THREAT_LEVEL_WATCH) hunt_log_add(t->khz, t->level, t->reason);
         }
         hunt_logged_level[i] = t->level;
+    }
+    /* default baseline: the first ~12 s of observation define "normal" */
+    if (!hunt.baseline_valid && !hunt_base_suppressed &&
+        hunt.frames >= HUNT_AUTO_BASE_FRAMES) {
+        threat_baseline_save(&hunt);
+        hunt_nvs_save_baseline();
+        hunt_base_auto = true;
+        hunt_changed_seen = ~hunt.changed;
     }
     esp_err_t graph_result = ESP_OK, waterfall_result = ESP_OK;
     if (hunt_screen == HUNT_SCREEN_SPECTRUM) {

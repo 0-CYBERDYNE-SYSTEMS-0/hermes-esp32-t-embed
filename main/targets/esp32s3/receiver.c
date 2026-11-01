@@ -325,6 +325,11 @@ static void handle_command(char *line) {
         reply(t_embed_ui_baseline_clear() ? "OK\n" : "ERR clear\n");
         return;
     }
+    if (!strcmp(line, "SWEEP")) {
+        t_embed_ui_sweep_reset();
+        reply("OK\n");
+        return;
+    }
 #endif
     if(!strcmp(line,"TRANSPORT?")) {
         char answer[64];

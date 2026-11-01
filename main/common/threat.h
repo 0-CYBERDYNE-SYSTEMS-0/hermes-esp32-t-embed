@@ -27,6 +27,7 @@ extern "C" {
 #define THREAT_LEVEL_AMBIENT 0u
 #define THREAT_LEVEL_WATCH 1u
 #define THREAT_LEVEL_CONCERN 2u
+#define THREAT_LOG_CAP 12u
 /* reason bits */
 #define THREAT_REASON_STEADY 0x01u
 #define THREAT_REASON_PERIODIC 0x02u
@@ -247,3 +248,31 @@ static inline void threat_baseline_clear(threat_state_t *s) {
 #ifdef __cplusplus
 }
 #endif
+
+/* Flag log: fixed ring of notable level escalations, oldest evicted. Lives
+ * here (not in the UI) so the host tests cover the overflow behavior. */
+typedef struct {
+    uint32_t t_s;
+    uint32_t khz;
+    uint8_t level;
+    uint8_t reason;
+} threat_log_event_t;
+
+typedef struct {
+    threat_log_event_t ev[THREAT_LOG_CAP];
+    uint8_t n;
+} threat_log_t;
+
+static inline void threat_log_push(threat_log_t *l, uint32_t t_s, uint32_t khz,
+                                   uint8_t level, uint8_t reason) {
+    if (!l) return;
+    if (l->n >= THREAT_LOG_CAP) {
+        memmove(&l->ev[0], &l->ev[1], sizeof(l->ev) - sizeof(l->ev[0]));
+        l->n = THREAT_LOG_CAP - 1u;
+    }
+    l->ev[l->n].t_s = t_s;
+    l->ev[l->n].khz = khz;
+    l->ev[l->n].level = level;
+    l->ev[l->n].reason = reason;
+    l->n++;
+}

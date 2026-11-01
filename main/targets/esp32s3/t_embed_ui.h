@@ -100,6 +100,7 @@ void t_embed_ui_hunt_json(char *out, size_t cap);
 void t_embed_ui_log_json(char *out, size_t cap);
 bool t_embed_ui_baseline_save(void);
 bool t_embed_ui_baseline_clear(void);
+void t_embed_ui_sweep_reset(void);
 
 #ifdef __cplusplus
 }
