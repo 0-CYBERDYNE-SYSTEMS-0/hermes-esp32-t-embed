@@ -650,19 +650,8 @@ static esp_err_t draw_footer(void) {
 }
 
 static esp_err_t draw_graph(const uint8_t *bins, unsigned nfft) {
-    static uint8_t flag_x[LCD_W];
-    memset(flag_x, 0, sizeof(flag_x));
     unsigned span_khz = rate_code == 6u ? 16000u : rate_code == 0u ? 80000u : 40000u;
     int64_t lo_khz = (int64_t)stats.frequency_mhz * 1000 - (int64_t)span_khz / 2;
-    for (unsigned i = 0; i < THREAT_TRACKED; i++) {
-        const threat_track_t *t = &hunt.track[i];
-        if (!t->used) continue;
-        if (t->level < THREAT_LEVEL_CONCERN && !(t->reason & THREAT_REASON_NEW)) continue;
-        int64_t off = (int64_t)t->khz - lo_khz;
-        if (off < 0 || off >= (int64_t)span_khz) continue;
-        unsigned fx = (unsigned)(off * (int64_t)LCD_W / (int64_t)span_khz);
-        if (fx < LCD_W) flag_x[fx] = 1;
-    }
     unsigned peak = 0;
     if (bins && nfft) for (unsigned i = 0; i < nfft; i++) if (bins[i] > peak) peak = bins[i];
     unsigned floor = peak > 64u ? peak - 64u : 0u;
@@ -688,7 +677,19 @@ static esp_err_t draw_graph(const uint8_t *bins, unsigned nfft) {
                                  ? COLOR_GRID : COLOR_BG;
             if (bins && (trace_y[x] == y || (trace_y[x] > 0u && trace_y[x] - 1u == y)))
                 color = COLOR_ACCENT;
-            if (flag_x[x] && gy < 3u) color = COLOR_RED;
+            if (gy < 3u) {
+                for (unsigned i = 0; i < THREAT_TRACKED; i++) {
+                    const threat_track_t *t = &hunt.track[i];
+                    if (!t->used) continue;
+                    if (t->level < THREAT_LEVEL_CONCERN && !(t->reason & THREAT_REASON_NEW)) continue;
+                    int64_t off = (int64_t)t->khz - lo_khz;
+                    if (off < 0 || off >= (int64_t)span_khz) continue;
+                    if ((unsigned)(off * (int64_t)LCD_W / (int64_t)span_khz) == x) {
+                        color = COLOR_RED;
+                        break;
+                    }
+                }
+            }
             pixel_be(line + x * 2u, color);
         }
         esp_err_t err = draw_row(y, line);

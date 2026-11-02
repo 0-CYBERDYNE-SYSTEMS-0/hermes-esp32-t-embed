@@ -304,7 +304,7 @@ static void handle_command(char *line) {
         return;
     }
     if (!strcmp(line, "HUNT?")) {
-        static char hunt_json[1536];
+        static char hunt_json[1024];
         t_embed_ui_hunt_json(hunt_json, sizeof(hunt_json));
         reply(hunt_json);
         reply("\n");
