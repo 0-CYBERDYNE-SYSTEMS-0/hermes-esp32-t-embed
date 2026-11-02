@@ -1168,8 +1168,10 @@ static void draw_track_screen(void) {
         }
         int over = (int)t->ema_code - (int)hunt.floor_code;
         int peak = (int)t->code_max - (int)hunt.floor_code;
-        if (over < 0) over = 0; if (over > 80) over = 80;
-        if (peak < 0) peak = 0; if (peak > 80) peak = 80;
+        if (over < 0) over = 0;
+        if (over > 80) over = 80;
+        if (peak < 0) peak = 0;
+        if (peak > 80) peak = 80;
         snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(t->khz / 1000u),
                  (unsigned long)(t->khz % 1000u));
         put_text_scanline_scaled(8, 32, y, buf, hunt_level_color(t->level), 3);
@@ -1382,8 +1384,10 @@ static void draw_hunt_screen(void) {
             if (tg) {
                 int p = tg->code_max - hunt.floor_code;
                 int l = tg->ema_code - hunt.floor_code;
-                if (p < 0) p = 0; if (p > 80) p = 80;
-                if (l < 0) l = 0; if (l > 80) l = 80;
+                if (p < 0) p = 0;
+                if (p > 80) p = 80;
+                if (l < 0) l = 0;
+                if (l > 80) l = 80;
                 unsigned gx = 8u + (unsigned)p * 303u / 80u;
                 unsigned lx = 8u + (unsigned)l * 303u / 80u;
                 for (unsigned yy = 128u; yy < 136u; yy += 2u)
