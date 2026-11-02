@@ -49,6 +49,11 @@ typedef struct {
     uint16_t period_cs;
     uint8_t level;
     uint8_t reason;
+    int16_t live_code;  /* instantaneous level this frame (floor = absent) */
+    int16_t ema_code;   /* smoothed live level: the hot/cold needle */
+    int16_t ema_ref;    /* ~2 s-old ema for the trend arrow */
+    uint32_t ref_ms;
+    int8_t trend;       /* +1 warming, -1 cooling, 0 steady */
 } threat_track_t;
 
 typedef struct {
@@ -200,6 +205,8 @@ static inline void threat_observe(threat_state_t *s, const uint8_t *bins,
             t->win_n = 1;
         }
         if (v > t->code_max) t->code_max = v;
+        t->live_code = v;
+        t->ema_code = t->ema_code ? (int16_t)((t->ema_code * 3 + v) / 4) : v;
         if (t->last_seen_ms != now_ms) {
             threat_track_arrival(t, now_ms);
             t->last_seen_ms = now_ms;
@@ -211,6 +218,19 @@ static inline void threat_observe(threat_state_t *s, const uint8_t *bins,
     for (unsigned i = 0; i < THREAT_TRACKED; i++) {
         threat_track_t *t = &s->track[i];
         if (!t->used) continue;
+        /* needle + trend run AFTER matching: absent frames decay toward the
+         * floor, present frames keep the boost from the match block */
+        if (t->last_seen_ms != now_ms) {
+            t->live_code = 0;
+            if (t->ema_code > s->floor_code)
+                t->ema_code = (int16_t)((t->ema_code * 7 + s->floor_code) / 8);
+        }
+        if (now_ms - t->ref_ms > 2000u) {
+            int16_t dd = (int16_t)(t->ema_code - t->ema_ref);
+            t->trend = dd > 6 ? 1 : dd < -6 ? -1 : 0;
+            t->ema_ref = t->ema_code;
+            t->ref_ms = now_ms;
+        }
         if (t->win_n) {
             unsigned duty = (unsigned)t->seen_n * 100u / t->win_n;
             t->duty_pct = duty > 100u ? 100u : (uint8_t)duty;
@@ -243,6 +263,23 @@ static inline void threat_baseline_clear(threat_state_t *s) {
     for (unsigned i = 0; i < THREAT_TRACKED; i++)
         s->track[i].baseline_code = INT16_MIN;
     s->baseline_valid = 0;
+}
+
+/* The hunt target: a pinned slot when idx >= 0, else the newest NEW signal,
+ * else the strongest tracked signal. NULL when nothing is tracked. */
+static inline threat_track_t *threat_track_at(threat_state_t *s, int idx) {
+    if (idx >= 0 && idx < (int)THREAT_TRACKED && s->track[idx].used)
+        return &s->track[idx];
+    threat_track_t *best = NULL, *newest = NULL;
+    for (unsigned i = 0; i < THREAT_TRACKED; i++) {
+        threat_track_t *t = &s->track[i];
+        if (!t->used) continue;
+        if (!best || t->code_max > best->code_max) best = t;
+        if ((t->reason & THREAT_REASON_NEW) &&
+            (!newest || t->code_max > newest->code_max))
+            newest = t;
+    }
+    return newest ? newest : best;
 }
 
 #ifdef __cplusplus

@@ -91,6 +91,10 @@ idf_component_register(SRCS "${receiver}" ${sources}
 
 if(ESP_SDR_T_EMBED_APPS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESP_SDR_T_EMBED_APPS=1)
+    # Build identity for the on-device INFO screen (CI passes the git SHA).
+    if(DEFINED ENV{FIRMWARE_VERSION} AND NOT "$ENV{FIRMWARE_VERSION}" STREQUAL "")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE HUNT_BUILD_TAG="$ENV{FIRMWARE_VERSION}")
+    endif()
 endif()
 
 # Keep the linker guard beside the backend whose SRAM aperture it protects.

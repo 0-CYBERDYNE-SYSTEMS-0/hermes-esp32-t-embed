@@ -132,9 +132,12 @@ static const waterfall_color_stop_t WATERFALL_COLORS[] = {
 
 /* --------------------------- tracker-hunt triage --------------------------- */
 #define HUNT_SCREEN_HUNT 0u
-#define HUNT_SCREEN_SPECTRUM 1u
-#define HUNT_SCREEN_LOG 2u
-#define HUNT_SCREEN_COMPARE 3u
+#define HUNT_SCREEN_TRACK 1u
+#define HUNT_SCREEN_COMPARE 2u
+#define HUNT_SCREEN_SPECTRUM 3u
+#define HUNT_SCREEN_LOG 4u
+#define HUNT_SCREEN_INFO 5u
+#define HUNT_SCREEN_COUNT 6u
 #define HUNT_LOG_CAP 12u
 #define HUNT_NVS_NS "hunt"
 
@@ -154,6 +157,9 @@ static uint32_t hunt_last_draw_us;
 static uint8_t hunt_logged_level[THREAT_TRACKED];
 static bool hunt_base_suppressed; /* explicit CLEAR ends auto-baselining */
 static bool hunt_base_auto;       /* the current baseline was auto-recorded */
+static int hunt_target_idx = -1;  /* pinned target slot; -1 = auto */
+static uint8_t track_hist[64];    /* TRACK sparkline of the target needle */
+static unsigned track_hist_i;
 static volatile uint32_t key_latch;
 
 static void IRAM_ATTR hunt_key_isr(void *arg) {
@@ -644,6 +650,19 @@ static esp_err_t draw_footer(void) {
 }
 
 static esp_err_t draw_graph(const uint8_t *bins, unsigned nfft) {
+    static uint8_t flag_x[LCD_W];
+    memset(flag_x, 0, sizeof(flag_x));
+    unsigned span_khz = rate_code == 6u ? 16000u : rate_code == 0u ? 80000u : 40000u;
+    int64_t lo_khz = (int64_t)stats.frequency_mhz * 1000 - (int64_t)span_khz / 2;
+    for (unsigned i = 0; i < THREAT_TRACKED; i++) {
+        const threat_track_t *t = &hunt.track[i];
+        if (!t->used) continue;
+        if (t->level < THREAT_LEVEL_CONCERN && !(t->reason & THREAT_REASON_NEW)) continue;
+        int64_t off = (int64_t)t->khz - lo_khz;
+        if (off < 0 || off >= (int64_t)span_khz) continue;
+        unsigned fx = (unsigned)(off * (int64_t)LCD_W / (int64_t)span_khz);
+        if (fx < LCD_W) flag_x[fx] = 1;
+    }
     unsigned peak = 0;
     if (bins && nfft) for (unsigned i = 0; i < nfft; i++) if (bins[i] > peak) peak = bins[i];
     unsigned floor = peak > 64u ? peak - 64u : 0u;
@@ -669,6 +688,7 @@ static esp_err_t draw_graph(const uint8_t *bins, unsigned nfft) {
                                  ? COLOR_GRID : COLOR_BG;
             if (bins && (trace_y[x] == y || (trace_y[x] > 0u && trace_y[x] - 1u == y)))
                 color = COLOR_ACCENT;
+            if (flag_x[x] && gy < 3u) color = COLOR_RED;
             pixel_be(line + x * 2u, color);
         }
         esp_err_t err = draw_row(y, line);
@@ -1072,6 +1092,167 @@ void t_embed_ui_render_launcher(unsigned selection) {
     }
 }
 
+static const char *hunt_screen_name(unsigned s) {
+    static const char *const names[HUNT_SCREEN_COUNT] = {
+        "HUNT", "TRACK", "COMPARE", "SPECTRUM", "LOG", "INFO"
+    };
+    return names[s % HUNT_SCREEN_COUNT];
+}
+
+/* Stepped triangle trend glyph: apex up = warming, apex down = cooling. */
+static void hunt_draw_arrow(int x, int y, int8_t trend, uint16_t color) {
+    for (unsigned row = 0; row < 9u; row++) {
+        int half = trend >= 0 ? (int)row : (int)(8u - row);
+        for (int dx = -half / 2; dx <= half / 2; dx++)
+            pixel_be(line + 2u * (unsigned)(x + dx), color);
+    }
+}
+
+/* Shared chrome: giant tuned frequency, view name, position dots. */
+static void draw_nav_header(uint16_t freq_color) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u", stats.frequency_mhz);
+    for (unsigned y = 0; y < 28u; y++) {
+        for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
+        if (y == 27u) for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_GRID);
+        put_text_scanline_scaled(8, 3, y, buf, freq_color, 3);
+        put_text_scanline(82, 18, y, "MHZ", COLOR_DIM);
+        put_text_scanline(112, 10, y, hunt_screen_name(hunt_screen), COLOR_ACCENT);
+        for (unsigned i = 0; i < HUNT_SCREEN_COUNT; i++) {
+            unsigned dx = 248u + i * 12u;
+            if (y >= 10u && y < 18u)
+                for (unsigned x = dx; x < dx + 8u; x++)
+                    pixel_be(line + 2u * x, i == hunt_screen ? COLOR_ACCENT : COLOR_GRID);
+        }
+        record_ui_result(draw_row(y, line));
+    }
+}
+
+static void hunt_led_write(uint8_t r, uint8_t g, uint8_t b) {
+    for (unsigned i = 0; i < 4u; i++) apa102_write_byte(0);
+    for (unsigned i = 0; i < LED_COUNT; i++) {
+        apa102_write_byte((uint8_t)(0xe0u | LED_DIM_BRIGHTNESS));
+        apa102_write_byte(b);
+        apa102_write_byte(g);
+        apa102_write_byte(r);
+    }
+    apa102_write_byte(0xffu);
+    gpio_set_level(PIN_LED_CLOCK, 0);
+}
+
+/* RGB lamp on the back of the board: the verdict without looking at the glass. */
+static void hunt_led_update(uint8_t level, bool on) {
+    uint8_t r = 0, g = 0, b = 0;
+    if (level >= THREAT_LEVEL_CONCERN) r = on ? 255u : 60u;
+    else if (level >= THREAT_LEVEL_WATCH) { r = on ? 180u : 60u; g = on ? 120u : 40u; }
+    else g = on ? 90u : 45u;
+    hunt_led_write(r, g, b);
+}
+
+#ifndef HUNT_BUILD_TAG
+#define HUNT_BUILD_TAG "local"
+#endif
+
+/* TRACK: one target, maximum signal. The convergence instrument. */
+static void draw_track_screen(void) {
+    char buf[44];
+    threat_track_t *t = threat_track_at(&hunt, hunt_target_idx);
+    draw_nav_header(COLOR_TEXT);
+    for (unsigned y = 28u; y < LCD_H; y++) {
+        for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_BG);
+        if (!t) {
+            put_text_scanline_scaled(20, 70, y, "NO TARGET YET", COLOR_DIM, 2);
+            put_text_scanline(20, 100, y, "SIGNALS LAND HERE AS THEY ARE SEEN", COLOR_DIM);
+            record_ui_result(draw_row(y, line));
+            continue;
+        }
+        int over = (int)t->ema_code - (int)hunt.floor_code;
+        int peak = (int)t->code_max - (int)hunt.floor_code;
+        if (over < 0) over = 0; if (over > 80) over = 80;
+        if (peak < 0) peak = 0; if (peak > 80) peak = 80;
+        snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(t->khz / 1000u),
+                 (unsigned long)(t->khz % 1000u));
+        put_text_scanline_scaled(8, 32, y, buf, hunt_level_color(t->level), 3);
+        put_text_scanline(196, 32, y, hunt_level_word(t->level), hunt_level_color(t->level));
+        if (t->reason & THREAT_REASON_NEW) snprintf(buf, sizeof(buf), "NEW SIGNAL");
+        else if (t->periodic) snprintf(buf, sizeof(buf), "BEACON %u.%02uS", t->period_cs / 100u, t->period_cs % 100u);
+        else snprintf(buf, sizeof(buf), "KNOWN TRACK");
+        put_text_scanline(196, 44, y, buf, COLOR_DIM);
+        hunt_draw_arrow(300, 32, t->trend,
+                        t->trend > 0 ? COLOR_RED : t->trend < 0 ? COLOR_GREEN : COLOR_DIM);
+        /* giant live level bar */
+        if (y >= 66u && y < 102u) {
+            for (unsigned x = 8u; x < 312u; x++) pixel_be(line + 2u * x, COLOR_HEADER);
+            unsigned fill = 8u + (unsigned)over * 303u / 80u;
+            for (unsigned x = 8u; x < fill; x++) {
+                uint16_t c = x < 109u ? COLOR_GREEN : x < 210u ? COLOR_AMBER : COLOR_RED;
+                for (unsigned yy = 70u; yy < 98u; yy++)
+                    if (y == yy) pixel_be(line + 2u * x, c);
+            }
+            if (y >= 68u && y < 100u) {
+                unsigned gx = 8u + (unsigned)peak * 303u / 80u;
+                for (unsigned yy = 68u; yy < 100u; yy += 4u)
+                    if (y == yy) pixel_be(line + 2u * gx, COLOR_TEXT);
+            }
+        }
+        put_text_scanline(8, 104, y, "COLD", COLOR_DIM);
+        put_text_scanline(284, 104, y, "HOT", COLOR_DIM);
+        snprintf(buf, sizeof(buf), "LIVE %ddB  PEAK %ddB  DUTY %u%%",
+                 over / 2, peak / 2, t->duty_pct);
+        put_text_scanline(8, 116, y, buf, COLOR_TEXT);
+        /* 25 s strength history */
+        if (y >= 128u && y < 152u) {
+            for (unsigned x = 8u; x < 248u; x++) pixel_be(line + 2u * x, COLOR_HEADER);
+            for (unsigned i = 0; i < 64u; i++) {
+                unsigned s = track_hist[(track_hist_i + i) % 64u];
+                unsigned x = 8u + i * 3u + 2u;
+                unsigned h = s * 23u / 80u;
+                if (y >= 151u - h && y < 151u)
+                    pixel_be(line + 2u * x, hunt_level_color(t->level));
+            }
+        }
+        put_text_scanline(258, 132, y, t->trend > 0 ? "WARMER" : t->trend < 0 ? "COOLER" : "STEADY",
+                          t->trend > 0 ? COLOR_RED : t->trend < 0 ? COLOR_GREEN : COLOR_DIM);
+        if (y >= 154u) {
+            for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
+            put_text_scanline(8, 159, y, "GHOST LINE = PEAK HELD", COLOR_DIM);
+            put_text_scanline(196, 159, y, hunt_target_idx >= 0 ? "TARGET PINNED" : "TARGET AUTO",
+                              hunt_target_idx >= 0 ? COLOR_ACCENT : COLOR_DIM);
+        }
+        record_ui_result(draw_row(y, line));
+    }
+}
+
+/* INFO: the trust screen — build identity + telemetry. */
+static void draw_info_screen(void) {
+    char buf[48];
+    draw_nav_header(COLOR_TEXT);
+    unsigned used_n = 0;
+    for (unsigned i = 0; i < THREAT_TRACKED; i++) used_n += hunt.track[i].used ? 1u : 0u;
+    for (unsigned y = 28u; y < LCD_H; y++) {
+        for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_BG);
+        put_text_scanline(8, 34, y, "BUILD", COLOR_DIM);
+        put_text_scanline(68, 34, y, HUNT_BUILD_TAG, COLOR_ACCENT);
+        snprintf(buf, sizeof(buf), "UP %lus   CAPTURES %lu",
+                 (unsigned long)(esp_timer_get_time() / 1000000), (unsigned long)hunt.frames);
+        put_text_scanline(8, 52, y, buf, COLOR_TEXT);
+        snprintf(buf, sizeof(buf), "TRACKS %u  FLOOR %d  HEAP %uK",
+                 used_n, (int)hunt.floor_code,
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024u));
+        put_text_scanline(8, 66, y, buf, COLOR_TEXT);
+        snprintf(buf, sizeof(buf), "BASE %s   FLAGS %u",
+                 !hunt.baseline_valid ? "OFF" : hunt_base_auto ? "AUTO" : "SET", hunt_log.n);
+        put_text_scanline(8, 80, y, buf, COLOR_TEXT);
+        put_text_scanline_scaled(8, 96, y, "T-EMBED ESP-SDR", COLOR_DIM, 2);
+        put_text_scanline(8, 120, y, "BAND 2196-2806 MHZ  2.4GHZ ONLY", COLOR_DIM);
+        if (y >= 154u) {
+            for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_HEADER);
+            put_text_scanline(8, 159, y, "TURN TUNE PRESS VIEW HOLD MENU", COLOR_DIM);
+        }
+        record_ui_result(draw_row(y, line));
+    }
+}
+
 /* Top track = strongest verdict, then strongest signal. */
 static const threat_track_t *hunt_top_track(void) {
     const threat_track_t *best = NULL;
@@ -1118,13 +1299,24 @@ static void draw_hunt_screen(void) {
     uint16_t top_color = (rel && top && !(top->reason & THREAT_REASON_NEW))
                              ? COLOR_DIM : hunt_level_color(shown);
     char buf[40];
-    for (unsigned y = 0; y < LCD_H; y++) {
-        uint16_t bg = y < 25u ? COLOR_HEADER : COLOR_BG;
-        for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, bg);
-        if (y == 24u) for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_GRID);
-        put_text_scanline(8, 8, y, "HUNT", COLOR_ACCENT);
-        snprintf(buf, sizeof(buf), "%u MHZ", stats.frequency_mhz);
-        put_text_scanline(240, 8, y, buf, COLOR_TEXT);
+    static bool pulse;
+    pulse = !pulse;
+    draw_nav_header(shown >= THREAT_LEVEL_CONCERN ? COLOR_RED
+                    : shown >= THREAT_LEVEL_WATCH ? COLOR_AMBER : COLOR_TEXT);
+    for (unsigned y = 28u; y < LCD_H; y++) {
+        for (unsigned x = 0; x < LCD_W; x++) pixel_be(line + 2u * x, COLOR_BG);
+        /* verdict band */
+        if (y < 58u) {
+            for (unsigned x = 0; x < LCD_W; x++)
+                pixel_be(line + 2u * x, COLOR_HEADER);
+            uint16_t vc = hunt_level_color(shown);
+            bool lit = !(shown >= THREAT_LEVEL_CONCERN && !pulse);
+            for (unsigned x = 0; x < 8u; x++)
+                pixel_be(line + 2u * x, lit ? vc : COLOR_GRID);
+            if (lit && shown >= THREAT_LEVEL_CONCERN)
+                for (unsigned x = 8u; x < LCD_W; x += 2u)
+                    pixel_be(line + 2u * x, COLOR_GRID);
+        }
         /* verdict */
         if (rel && !new_n) {
             put_text_scanline_scaled(8, 28, y, "CLEAR", COLOR_GREEN, 2);
@@ -1182,17 +1374,23 @@ static void draw_hunt_screen(void) {
         } else {
             put_text_scanline(14, 95, y, "NO SIGNALS YET", COLOR_DIM);
         }
-        /* hot/cold */
+        /* hot/cold: ghost = peak held, live = needle */
         if (y >= 128u && y < 136u) {
             for (unsigned x = 8u; x < 312u; x++)
                 pixel_be(line + 2u * x, power_color((x - 8u) * 255u / 303u));
-            if (top) {
-                int over = top->code_max - hunt.floor_code;
-                if (over < 0) over = 0;
-                if (over > 80) over = 80;
-                unsigned mark = 8u + (unsigned)over * 303u / 80u;
-                for (unsigned x = mark - 1u; x <= mark + 1u; x++)
-                    pixel_be(line + 2u * x, COLOR_TEXT);
+            threat_track_t *tg = threat_track_at(&hunt, hunt_target_idx);
+            if (tg) {
+                int p = tg->code_max - hunt.floor_code;
+                int l = tg->ema_code - hunt.floor_code;
+                if (p < 0) p = 0; if (p > 80) p = 80;
+                if (l < 0) l = 0; if (l > 80) l = 80;
+                unsigned gx = 8u + (unsigned)p * 303u / 80u;
+                unsigned lx = 8u + (unsigned)l * 303u / 80u;
+                for (unsigned yy = 128u; yy < 136u; yy += 2u)
+                    if (y == yy) pixel_be(line + 2u * gx, COLOR_TEXT);
+                if (y >= 129u && y < 135u)
+                    for (unsigned xx = lx - 1u; xx <= lx + 1u; xx++)
+                        pixel_be(line + 2u * xx, COLOR_ACCENT);
             }
         }
         put_text_scanline(8, 138, y, "COLD", COLOR_DIM);
@@ -1279,9 +1477,35 @@ static void draw_log_screen(void) {
         put_text_scanline(8, 8, y, "FLAG LOG", COLOR_ACCENT);
         snprintf(buf, sizeof(buf), "%u MHZ", stats.frequency_mhz);
         put_text_scanline(240, 8, y, buf, COLOR_TEXT);
-        for (unsigned i = 0; i < hunt_log.n && i < 6u; i++) {
+        /* beacon rhythm strip: arrivals of the top track over 30 s */
+        {
+            const threat_track_t *rt = hunt_top_track();
+            if (rt && y >= 30u && y < 42u) {
+                for (unsigned x = 8u; x < 312u; x++) pixel_be(line + 2u * x, COLOR_HEADER);
+                uint32_t newest = 0;
+                for (unsigned i = 0; i < THREAT_ARRIVALS; i++)
+                    if (rt->arrive_ms[i] > newest) newest = rt->arrive_ms[i];
+                if (y == 36u)
+                    for (unsigned x = 8u; x < 312u; x++) pixel_be(line + 2u * x, COLOR_GRID);
+                for (unsigned i = 0; i < THREAT_ARRIVALS; i++) {
+                    uint32_t a = rt->arrive_ms[i];
+                    if (!a || newest < a) continue;
+                    uint32_t age = newest - a;
+                    if (age > 30000u) continue;
+                    unsigned dx = 311u - age * 303u / 30000u;
+                    if (y >= 33u && y < 40u && dx >= 8u)
+                        pixel_be(line + 2u * dx, hunt_level_color(rt->level));
+                }
+                if (rt->periodic) {
+                    snprintf(buf, sizeof(buf), "RHYTHM %u.%02uS",
+                             rt->period_cs / 100u, rt->period_cs % 100u);
+                    put_text_scanline(232, 30, y, buf, COLOR_AMBER);
+                }
+            }
+        }
+        for (unsigned i = 0; i < hunt_log.n && i < 5u; i++) {
             const threat_log_event_t *e = &hunt_log.ev[hunt_log.n - 1u - i];
-            unsigned top = 32u + i * 19u;
+            unsigned top = 46u + i * 18u;
             if (y > top && y < top + 17u) {
                 for (unsigned x = 8u; x < 14u; x++)
                     pixel_be(line + 2u * x, hunt_level_color(e->level));
@@ -1315,9 +1539,34 @@ static void hunt_render_throttled(bool force) {
         now - hunt_last_draw_us < 400000) return;
     hunt_changed_seen = hunt.changed;
     hunt_last_draw_us = (uint32_t)now;
-    if (hunt_screen == HUNT_SCREEN_HUNT) draw_hunt_screen();
-    else if (hunt_screen == HUNT_SCREEN_LOG) draw_log_screen();
-    else draw_compare_screen();
+    /* sparkline feed: the target needle over the noise floor */
+    threat_track_t *tg = threat_track_at(&hunt, hunt_target_idx);
+    unsigned lv = 0;
+    if (tg && tg->ema_code > hunt.floor_code) {
+        lv = (unsigned)(tg->ema_code - hunt.floor_code);
+        if (lv > 80u) lv = 80u;
+    }
+    track_hist[track_hist_i++ % 64u] = (uint8_t)lv;
+    /* the lamp on the back mirrors the HUNT verdict, baseline-relative */
+    uint8_t lvl = hunt.verdict;
+    if (hunt.baseline_valid) {
+        lvl = 0;
+        for (unsigned i = 0; i < THREAT_TRACKED; i++)
+            if (hunt.track[i].used && (hunt.track[i].reason & THREAT_REASON_NEW) &&
+                hunt.track[i].level > lvl)
+                lvl = hunt.track[i].level;
+    }
+    static bool led_pulse;
+    led_pulse = !led_pulse;
+    hunt_led_update(lvl, led_pulse);
+    switch (hunt_screen) {
+        case HUNT_SCREEN_HUNT: draw_hunt_screen(); break;
+        case HUNT_SCREEN_TRACK: draw_track_screen(); break;
+        case HUNT_SCREEN_LOG: draw_log_screen(); break;
+        case HUNT_SCREEN_INFO: draw_info_screen(); break;
+        case HUNT_SCREEN_SPECTRUM: break; /* render_spectrum owns the glass */
+        default: draw_compare_screen(); break;
+    }
 }
 
 void t_embed_ui_hunt_json(char *out, size_t cap) {
@@ -1463,8 +1712,8 @@ static void sdr_render_menu(void) {
                                        sdr_span_selection, "TURN SELECT PRESS SET");
     } else if (sdr_base_menu_active) {
         static const char *const base[] = { "NEW SWEEP", "SAVE BASELINE",
-                                            "CLEAR BASELINE", "BACK" };
-        t_embed_ui_render_menu_overlay("SWEEP", base, 4u,
+                                            "CLEAR BASELINE", "NEXT TARGET", "BACK" };
+        t_embed_ui_render_menu_overlay("SWEEP", base, 5u,
                                        sdr_base_selection, "TURN SELECT PRESS SET");
     } else {
         static const char *const items[] = { "PAUSE / RESUME", "SPAN", "STEP",
@@ -1496,7 +1745,7 @@ bool t_embed_ui_poll_controls(unsigned *frequency_mhz) {
                                                        event.detents, 3u);
             else if (sdr_base_menu_active)
                 sdr_base_selection = t_embed_menu_move(sdr_base_selection,
-                                                       event.detents, 4u);
+                                                       event.detents, 5u);
             else
                 sdr_menu_selection = t_embed_menu_move(sdr_menu_selection,
                                                        event.detents, 6u);
@@ -1512,6 +1761,12 @@ bool t_embed_ui_poll_controls(unsigned *frequency_mhz) {
                 if (sdr_base_selection == 0u) t_embed_ui_sweep_reset();
                 else if (sdr_base_selection == 1u) (void)t_embed_ui_baseline_save();
                 else if (sdr_base_selection == 2u) (void)t_embed_ui_baseline_clear();
+                else if (sdr_base_selection == 3u) {
+                    int next = -1;
+                    for (int i = hunt_target_idx + 1; i < (int)THREAT_TRACKED; i++)
+                        if (hunt.track[i].used) { next = i; break; }
+                    hunt_target_idx = next; /* wraps to auto after the last */
+                }
                 sdr_base_menu_active = false;
                 view_valid = false;
                 t_embed_ui_invalidate_overlays();
@@ -1564,8 +1819,8 @@ bool t_embed_ui_poll_controls(unsigned *frequency_mhz) {
         }
     }
     if (event.short_click && event.press_context == T_EMBED_INPUT_SDR) {
-        /* one press flips the view: HUNT -> COMPARE -> SPECTRUM -> LOG */
-        hunt_screen = (hunt_screen + 1u) % 4u;
+        /* one press flips the view: HUNT TRACK COMPARE SPECTRUM LOG INFO */
+        hunt_screen = (hunt_screen + 1u) % HUNT_SCREEN_COUNT;
         view_valid = false;
         hunt_changed_seen = ~hunt.changed;
         t_embed_ui_invalidate_overlays();

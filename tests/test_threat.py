@@ -146,6 +146,22 @@ int main(void) {
         printf("log-ring ok\n");
     }
 
+    /* 10: live needle rises with signal, falls toward floor when it stops;
+     * trend arrow reflects the 2 s change */
+    threat_init(&s);
+    for (unsigned i = 0; i < 40u; i++) step(100, 200, 2000u + i * 100u);
+    assert(s.track[0].live_code == 200);
+    assert(s.track[0].ema_code > 190);          /* converged near the peak */
+    threat_track_t *tr = &s.track[0];
+    tr->ref_ms = 0; tr->ema_ref = tr->ema_code; /* force a trend window */
+    for (unsigned i = 0; i < 30u; i++) step(100, 220, 6000u + i * 100u);
+    assert(tr->trend == 1);                     /* warming across 2 s windows */
+    for (unsigned i = 0; i < 40u; i++) step(-1, 0, 9000u + i * 100u);
+    assert(tr->live_code == 0);                 /* absent this frame */
+    assert(tr->ema_code < 160);                 /* needle fell back */
+    assert(tr->trend == -1);                    /* cooling */
+    printf("needle ok\n");
+
     printf("ALL PASS\n");
     return 0;
 }
