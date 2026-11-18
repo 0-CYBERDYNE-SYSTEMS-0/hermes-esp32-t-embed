@@ -13,9 +13,10 @@ TRACK / COMPARE / SPECTRUM / LOG / INFO), hold opens the menu. The USB serial
 CLI answers regardless of what's on glass (`HUNT?`, `LOG?`, `BASELINE
 SAVE|CLEAR`). The INFO screen shows the exact git SHA of the running build.
 
-Rollback: flash `../tembed-work/restore-6831eb2-20261102.bin` (or
-`restore-t-embed-a44824e-20261026.bin`) at 0x0 with esptool; CI artifacts carry
-a `manifest.json` with per-part sha256 for verification.
+Rollback: flash a full-flash restore-point backup (e.g.
+`restore-6831eb2-20261102.bin`, taken with `esptool read-flash 0x0 0x1000000`)
+at 0x0 with esptool; CI artifacts carry a `manifest.json` with per-part sha256
+for verification.
 
 ## Usage
 
