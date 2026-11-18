@@ -96,6 +96,9 @@ void t_embed_ui_render_view(const t_embed_ui_view_t *view);
 void t_embed_ui_render_spectrum(const uint8_t *bins, unsigned nfft);
 void t_embed_ui_get_stats(t_embed_ui_stats_t *stats);
 /* Tracker-hunt triage: JSON snapshots for the serial CLI, baseline control. */
+typedef void (*t_embed_ui_event_hook_t)(unsigned khz, const char *level,
+                                        unsigned reason, int over_floor);
+void t_embed_ui_set_event_hook(t_embed_ui_event_hook_t hook);
 void t_embed_ui_hunt_json(char *out, size_t cap);
 void t_embed_ui_log_json(char *out, size_t cap);
 bool t_embed_ui_baseline_save(void);

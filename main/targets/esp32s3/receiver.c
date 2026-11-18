@@ -27,6 +27,7 @@
 #ifdef ESP_SDR_T_EMBED_APPS
 #include "esp_system.h"
 #include "t_embed_apps.h"
+#include "t_embed_sdlog.h"
 #endif
 
 /* Vendor S3 adctrig uses the 64 KiB aperture at 0x3fcd0000 (MAC_DUMP_USAGE=4).
@@ -136,6 +137,19 @@ static unsigned probe_source,probe_clock,probe_adc=4;
 extern void rom_dac_rate_set(unsigned);
 static bool probe_capture;
 #endif
+/* Marks / labels owned by the SDR app's logging path. */
+#ifdef ESP_SDR_T_EMBED_APPS
+static bool capture_to_card;
+static char capture_label[24] = "iq";
+static int t_embed_gain_arg(void) {
+    return gain_mode == GAIN_HARDWARE ? -1 : (int)gain_code;
+}
+static void t_embed_sdlog_event_hook(unsigned khz, const char *level,
+                                     unsigned reason, int over_floor) {
+    t_embed_sdlog_note_event(khz, level, reason, over_floor);
+}
+#endif
+
 static bool capture(unsigned n,unsigned divider,unsigned format) {
     if(divider!=0 && divider!=1 && divider!=6){reply("ERR rate\n");return false;}
     prepare_rx();
@@ -179,6 +193,18 @@ static bool capture(unsigned n,unsigned divider,unsigned format) {
     }
     size_t bytes=wire_size(n,format);
     if(format==16)pack_iq8(n);else if(format==20)pack_iq(n);
+#ifdef ESP_SDR_T_EMBED_APPS
+    if(capture_to_card) {
+        bool stored=t_embed_sdlog_write_iq((const uint8_t *)IQ_BUFFER,bytes,n,
+                                           divider,frequency_mhz,t_embed_gain_arg(),
+                                           capture_label);
+        char h[64];
+        snprintf(h,sizeof(h),"REC %u %04" PRIx32 " %s\n",n,
+                 esp_rom_crc32_le(0,(const uint8_t *)IQ_BUFFER,bytes),
+                 stored?"sd":"fail");
+        return send_bytes(h,strlen(h));
+    }
+#endif
     uint32_t crc=esp_rom_crc32_le(0,(const uint8_t *)IQ_BUFFER,bytes);
     char h[96];
     snprintf(h,sizeof(h),"DATA %u %08" PRIx32 " %" PRIu32 "\n",n,crc,elapsed);
@@ -286,6 +312,94 @@ static bool ring_command(const char *line) {
 }
 
 static void handle_command(char *line) {
+#ifdef ESP_SDR_T_EMBED_APPS
+    /* Session persistence. The card is the only artifact that survives a walk:
+     * the RAM event ring and the IQ buffer do not. */
+    if (!strcmp(line, "SD?")) {
+        static char status[384];
+        t_embed_sdlog_status_json(status, sizeof(status));
+        reply(status);
+        return;
+    }
+    if (!strcmp(line, "SD MOUNT")) {
+        reply(t_embed_sdlog_mount() ? "OK SD\n" : "ERR SD\n");
+        return;
+    }
+    if (!strcmp(line, "TIME?")) {
+        char answer[64];
+        long long now = (long long)t_embed_sdlog_now_ms();
+        snprintf(answer, sizeof(answer), "TIME %lld %s\n", now,
+                 now > 0 ? "host" : "unsynced");
+        reply(answer);
+        return;
+    }
+    if (!strncmp(line, "TIME ", 5)) {
+        long long ms = 0;
+        char extra;
+        if (sscanf(line, "TIME %lld %c", &ms, &extra) == 1 && ms > 0 &&
+            t_embed_sdlog_set_clock((int64_t)ms)) {
+            char answer[64];
+            snprintf(answer, sizeof(answer), "OK TIME %lld\n", (long long)ms);
+            reply(answer);
+        } else {
+            reply("ERR time\n");
+        }
+        return;
+    }
+    if (!strncmp(line, "LOGRATE ", 8)) {
+        unsigned ms = 0;
+        char extra;
+        if (sscanf(line, "LOGRATE %u %c", &ms, &extra) == 1) {
+            t_embed_sdlog_set_interval_ms(ms);
+            reply("OK\n");
+        } else {
+            reply("ERR args\n");
+        }
+        return;
+    }
+    if (!strncmp(line, "LOG START", 9)) {
+        char label[24] = "session";
+        (void)sscanf(line + 9, " %23s", label);
+        unsigned nfft = 1024u;
+        bool started = t_embed_sdlog_start(label, ring_capture_rate_hz(t_embed_ui_rate_code()),
+                                          nfft, frequency_mhz, t_embed_ui_rate_code(),
+                                          rx_filter > 0 ? (unsigned)rx_filter : 0u,
+                                          t_embed_gain_arg());
+        char answer[96];
+        if (started)
+            snprintf(answer, sizeof(answer), "OK LOG %s\n", t_embed_sdlog_session());
+        else
+            snprintf(answer, sizeof(answer), "ERR log\n");
+        reply(answer);
+        return;
+    }
+    if (!strcmp(line, "LOG STOP")) {
+        char answer[96];
+        t_embed_sdlog_stop();
+        snprintf(answer, sizeof(answer), "OK LOG STOP %lu\n",
+                 (unsigned long)t_embed_sdlog_frames_written());
+        reply(answer);
+        return;
+    }
+    if (!strncmp(line, "LOGREC", 6)) {
+        unsigned samples = 16380u, rate = 6u;
+        char label[24] = "iq";
+        char extra;
+        int fields = sscanf(line + 6, " %u %u %23s %c", &samples, &rate, label, &extra);
+        if (fields == 4) { reply("ERR args\n"); return; }
+        if (samples < 256u || samples > IQ_WORDS ||
+            (rate != 0u && rate != 1u && rate != 6u)) {
+            reply("ERR args\n");
+            return;
+        }
+        snprintf(capture_label, sizeof(capture_label), "%s", label);
+        capture_to_card = true;
+        bool ok = capture(samples, rate, 16); /* IQ8 -> SigMF ci8 */
+        capture_to_card = false;
+        if (!ok) reply("ERR capture\n");
+        return;
+    }
+#endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
     if (!strcmp(line, "UI?")) {
         t_embed_ui_stats_t s;
@@ -437,6 +551,11 @@ void app_main(void) {
     ESP_ERROR_CHECK(usb_serial_jtag_driver_uninstall());
     burst_serial_init();
     ring_capture_init();
+#ifdef ESP_SDR_T_EMBED_APPS
+    /* HUNT flags reach the card through this hook; the RAM ring is only a
+     * convenience for the screen. */
+    t_embed_ui_set_event_hook(t_embed_sdlog_event_hook);
+#endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
 #ifdef ESP_SDR_T_EMBED_APPS
     bool ui_ready = true;
@@ -508,6 +627,11 @@ void app_main(void) {
                 if (ring_capture_latest_spectrum(&new_bins, &new_n, &new_seq) &&
                     new_seq != prior_seq && new_n == nfft) {
                     t_embed_ui_render_spectrum(new_bins, new_n);
+#ifdef ESP_SDR_T_EMBED_APPS
+                    t_embed_sdlog_note_frame(new_bins, new_n, frequency_mhz,
+                                             ring_capture_rate_hz(rate),
+                                             t_embed_gain_arg());
+#endif
                 }
                 continue;
             }

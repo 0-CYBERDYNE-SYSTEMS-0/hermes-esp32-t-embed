@@ -52,11 +52,13 @@ if(IDF_TARGET STREQUAL "esp32s3")
         list(APPEND sources "${target_dir}/t_embed_launcher.c"
                             "${target_dir}/t_embed_microphone.c"
                             "${target_dir}/t_embed_audio_input.c"
+                            "${target_dir}/t_embed_sdlog.c"
                             "${target_dir}/t_embed_hermes.cpp"
                             "${target_dir}/t_embed_hermes_audio.cpp"
                             "${target_dir}/t_embed_hermes_transport.cpp")
         list(APPEND private_dependencies esp_codec_dev esp_websocket_client heap
-                                        mbedtls esp_event esp_netif esp_hw_support esp_system)
+                                        mbedtls esp_event esp_netif esp_hw_support esp_system
+                                        fatfs sdmmc esp_driver_sdspi)
     endif()
 elseif(IDF_TARGET STREQUAL "esp32c5" OR IDF_TARGET STREQUAL "esp32c6" OR IDF_TARGET STREQUAL "esp32c61")
     set(receiver "families/c5_c6_c61/receiver.c")
