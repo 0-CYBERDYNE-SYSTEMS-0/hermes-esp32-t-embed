@@ -1,0 +1,6 @@
+# Runtime outputs of the host toolkit — never committed.
+__pycache__/
+logs/
+err.log
+hunt-verify.json
+report.html
