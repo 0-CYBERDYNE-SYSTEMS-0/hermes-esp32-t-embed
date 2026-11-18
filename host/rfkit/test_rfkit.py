@@ -389,5 +389,110 @@ class ThreatTests(unittest.TestCase):
             self.assertIn("VERDICT: CLEAN", html)
 
 
+class CardSessionTests(unittest.TestCase):
+    """A session pulled off the device card must read without the device."""
+
+    def make_session(self, root: Path) -> Path:
+        session = root / "20261118-230405"
+        (session / "iq").mkdir(parents=True)
+        (session / "net").mkdir(parents=True)
+        (session / "session.json").write_text(json.dumps({
+            "schema": "tembed-sigint/1", "board": "lilygo-t-embed-s3r8",
+            "build": "abc1234", "session": "20261118-230405", "label": "walk",
+            "started_unix_ms": 1763500000123, "started_iso": "2025-11-18T21:06:40.123Z",
+            "time_source": "host", "lo_mhz": 2437, "rate_code": 6,
+            "rate_hz": 16000000, "nfft": NFFT, "lpf_code": 0, "gain_index": 3,
+            "battery_mv": 0,
+        }))
+        frames = []
+        for i in range(30):
+            codes = [30 + (j * 7) % 5 for j in range(NFFT)]
+            codes[200] = 190
+            frames.append(json.dumps({
+                "seq": i, "t_ms": i * 1000, "t_s": float(i),
+                "ts": "2025-11-18T21:06:41.123Z", "lo_mhz": 2437,
+                "nfft": NFFT, "rate_hz": RATE, "gain": 3,
+                "floor_code": sorted(codes)[max(0, int(0.2 * NFFT) - 1)],
+                "codes": codes,
+            }))
+        (session / "frames.ndjson").write_text("\n".join(frames) + "\n")
+        (session / "events.ndjson").write_text(json.dumps({
+            "t_ms": 12000, "ts": "2025-11-18T21:06:52.123Z", "khz": 2441000,
+            "level": "CONCERN", "reason": 5, "over_floor": 34}) + "\n")
+        meta = {
+            "global": {"core:datatype": "ci8", "core:sample_rate": RATE,
+                       "core:version": "1.2.6", "core:recorder": "esp_sdr",
+                       "esp_sdr:rate_code": 6, "esp_sdr:gain_index": 3},
+            "captures": [{"core:sample_start": 0, "core:frequency": 2437e6}],
+            "annotations": [],
+        }
+        stem = session / "iq" / "000042-0001-ble"
+        stem.with_suffix(".sigmf-meta").write_text(json.dumps(meta))
+        stem.with_suffix(".sigmf-data").write_bytes(bytes(2000))  # 1000 ci8 samples
+        shb = struct.pack("<IIIHHqI", 0x0A0D0D0A, 28, 0x1A2B3C4D, 1, 0, -1, 28)
+        idb = struct.pack("<IIHHII", 1, 20, 127, 0, 1600, 20)
+        epb = struct.pack("<IIIIIII", 6, 32 + 8, 0, 0, 0, 8, 8) + b"\x00" * 8 + struct.pack("<I", 40)
+        (session / "net" / "wifi-42.pcapng").write_bytes(shb + idb + epb + epb)
+        return session
+
+    def test_ndjson_frames_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self.make_session(Path(tmp))
+            frames = rfkit.load_frames(session)
+            self.assertEqual(len(frames), 30)
+            self.assertEqual(frames[0]["nfft"], NFFT)
+
+    def test_pcapng_inventory_counts_packets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self.make_session(Path(tmp))
+            inv = rfkit.pcapng_inventory(session / "net" / "wifi-42.pcapng")
+            self.assertEqual(inv["packets"], 2)
+            self.assertEqual(inv["interfaces"], 1)
+            self.assertFalse(inv["damaged"])
+
+    def test_pcapng_inventory_flags_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cut.pcapng"
+            shb = struct.pack("<IIIHHqI", 0x0A0D0D0A, 28, 0x1A2B3C4D, 1, 0, -1, 28)
+            path.write_bytes(shb + struct.pack("<II", 6, 400) + b"\x00" * 10)
+            inv = rfkit.pcapng_inventory(path)
+            self.assertTrue(inv["damaged"])
+            self.assertEqual(inv["packets"], 0)
+
+    def test_sigmf_inventory_derives_sample_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self.make_session(Path(tmp))
+            recs = rfkit.sigmf_inventory(session / "iq")
+            self.assertEqual(len(recs), 1)
+            self.assertEqual(recs[0]["datatype"], "ci8")
+            self.assertEqual(recs[0]["samples"], 1000)
+            self.assertEqual(recs[0]["center_hz"], 2437e6)
+
+    def test_ingest_writes_report_and_inventory(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self.make_session(Path(tmp))
+
+            class Args:
+                pass
+            args = Args()
+            args.session = session
+            args.threshold = 10.0
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(rfkit.cmd_ingest(args), 0)
+            printed = out.getvalue()
+            self.assertIn("build=abc1234", printed)
+            self.assertIn("2 packets", printed)
+            inventory = json.loads((session / "ingest.json").read_text())
+            self.assertEqual(inventory["frames"], 30)
+            self.assertEqual(len(inventory["events"]), 1)
+            self.assertEqual(len(inventory["recordings"]), 1)
+            self.assertEqual(len(inventory["captures"]), 1)
+            self.assertTrue((session / "report.json").exists())
+            self.assertGreater(inventory["signals"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

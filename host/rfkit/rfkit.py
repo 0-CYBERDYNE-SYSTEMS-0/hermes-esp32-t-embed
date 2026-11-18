@@ -30,6 +30,7 @@ import argparse
 import datetime as dt
 import json
 import math
+import struct
 import sys
 import time
 from pathlib import Path
@@ -405,8 +406,130 @@ def cmd_sweep(args) -> int:
 # ---------------------------------------------------------------- analyze cmd
 
 def load_frames(session_dir: Path) -> list[dict]:
-    path = session_dir / "frames.jsonl"
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    """Frames from either a host capture (frames.jsonl) or a device session
+    pulled off the microSD card (frames.ndjson)."""
+    for name in ("frames.jsonl", "frames.ndjson"):
+        path = session_dir / name
+        if path.exists():
+            return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    raise FileNotFoundError(f"no frames.jsonl or frames.ndjson in {session_dir}")
+
+
+def pcapng_inventory(path: Path) -> dict:
+    """Count interfaces and packets by walking PCAPNG block lengths.
+
+    Reading the container without libpcap keeps the card-check dependency-free
+    and catches a truncated or half-written capture, which is what a dead
+    battery actually leaves behind.
+    """
+    data = path.read_bytes()
+    interfaces = packets = 0
+    offset = 0
+    damaged = False
+    while offset + 8 <= len(data):
+        kind, length = struct.unpack_from("<II", data, offset)
+        if length < 12 or offset + length > len(data):
+            damaged = True
+            break
+        if kind == 1:
+            interfaces += 1
+        elif kind == 6:
+            packets += 1
+        offset += length
+    return {"path": path.name, "bytes": len(data), "packets": packets,
+            "interfaces": interfaces, "damaged": damaged}
+
+
+def sigmf_inventory(directory: Path) -> list[dict]:
+    """Recordings in a session: datatype, rate, samples, centre frequency."""
+    out = []
+    for meta_path in sorted(directory.glob("*.sigmf-meta")):
+        try:
+            meta = json.loads(meta_path.read_text())
+        except json.JSONDecodeError:
+            continue
+        global_ = meta.get("global", {})
+        datatype = global_.get("core:datatype", "")
+        bytes_per_sample = {"ci8": 2, "ci16_le": 4, "cf32_le": 8}.get(datatype)
+        data_path = Path(str(meta_path)[: -len(".sigmf-meta")] + ".sigmf-data")
+        size = data_path.stat().st_size if data_path.exists() else 0
+        capture = (meta.get("captures") or [{}])[0]
+        out.append({
+            "name": data_path.name,
+            "datatype": datatype,
+            "sample_rate_hz": global_.get("core:sample_rate"),
+            "center_hz": capture.get("core:frequency"),
+            "started_iso": capture.get("esp_sdr:started_iso"),
+            "samples": size // bytes_per_sample if bytes_per_sample else None,
+            "bytes": size,
+        })
+    return out
+
+
+def cmd_ingest(args) -> int:
+    """Everything a card session contains, in one pass, plus report.json/html."""
+    session = Path(args.session)
+    try:
+        frames = load_frames(session)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    manifest = {}
+    if (session / "session.json").exists():
+        manifest = json.loads((session / "session.json").read_text())
+    events = []
+    events_path = session / "events.ndjson"
+    if events_path.exists():
+        events = [json.loads(l) for l in events_path.read_text().splitlines() if l.strip()]
+    recordings = sigmf_inventory(session / "iq") if (session / "iq").exists() else []
+    captures = [pcapng_inventory(p) for p in sorted((session / "net").glob("*.pcapng"))] \
+        if (session / "net").exists() else []
+
+    result = analyze_frames(frames, threshold_db=args.threshold)
+    (session / "report.json").write_text(json.dumps(result, indent=2) + "\n")
+    inventory = {
+        "session": session.name,
+        "manifest": manifest,
+        "frames": result["frames"],
+        "duration_s": result["duration_s"],
+        "lo_mhz": result["lo_mhz"],
+        "nfft": result["nfft"],
+        "signals": len(result["signals"]),
+        "threat": result.get("threat", {}),
+        "events": events,
+        "recordings": recordings,
+        "captures": captures,
+    }
+    (session / "ingest.json").write_text(json.dumps(inventory, indent=2) + "\n")
+
+    pieces = []
+    if manifest.get("label"):
+        pieces.append(f"label={manifest['label']}")
+    if manifest.get("build"):
+        pieces.append(f"build={manifest['build']}")
+    if manifest.get("time_source"):
+        pieces.append(f"clock={manifest['time_source']}")
+    if manifest.get("gain_index") is not None:
+        pieces.append(f"gain={manifest['gain_index']}")
+    provenance = " ".join(pieces)
+    print(f"session {session.name}  {provenance}".rstrip())
+    print(f"frames {result['frames']}  {result['duration_s']}s  "
+          f"lo {result['lo_mhz']}MHz  nfft {result['nfft']}  "
+          f"signals {len(result['signals'])}  events {len(events)}")
+    verdict = result.get("threat", {"level": "AMBIENT", "reasons": []})
+    print(f"verdict {verdict['level']}")
+    for reason in verdict.get("reasons", []):
+        print(f"  {reason}")
+    for rec in recordings:
+        print(f"iq {rec['name']}  {rec['datatype']}  {rec['samples']} samples  "
+              f"{(rec['center_hz'] or 0) / 1e6:.3f} MHz  "
+              f"{(rec['sample_rate_hz'] or 0) / 1e6:.0f} MS/s")
+    for cap in captures:
+        note = " (damaged tail)" if cap["damaged"] else ""
+        print(f"wifi {cap['path']}  {cap['packets']} packets{note}")
+    print(f"inventory: {session / 'ingest.json'}")
+    return 0
+
 
 LEVELS = {"AMBIENT": 0, "WATCH": 1, "CONCERN": 2}
 
@@ -834,6 +957,12 @@ def main() -> int:
     p = sub.add_parser("report", help="render report.html for a session")
     p.add_argument("session", type=Path)
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("ingest", help="inventory a session pulled off the device card")
+    p.add_argument("session", type=Path,
+                   help="session directory copied from /sdcard/sigint/<stamp>")
+    p.add_argument("--threshold", type=float, default=10.0)
+    p.set_defaults(fn=cmd_ingest)
 
     args = ap.parse_args()
     return args.fn(args)
