@@ -38,6 +38,7 @@ void t_embed_sdlog_stop(void);
 bool t_embed_sdlog_active(void);
 uint32_t t_embed_sdlog_frames_written(void);
 const char *t_embed_sdlog_session(void); /* "" when idle */
+const char *t_embed_sdlog_dir(void);     /* "" when no session is open */
 
 /* Rate-limited NDJSON frame append (default 200 ms between frames). */
 void t_embed_sdlog_note_frame(const uint8_t *codes, unsigned nfft,

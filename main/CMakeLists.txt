@@ -53,6 +53,7 @@ if(IDF_TARGET STREQUAL "esp32s3")
                             "${target_dir}/t_embed_microphone.c"
                             "${target_dir}/t_embed_audio_input.c"
                             "${target_dir}/t_embed_sdlog.c"
+                            "${target_dir}/t_embed_wifisniff.c"
                             "${target_dir}/t_embed_hermes.cpp"
                             "${target_dir}/t_embed_hermes_audio.cpp"
                             "${target_dir}/t_embed_hermes_transport.cpp")

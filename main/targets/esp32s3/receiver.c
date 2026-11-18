@@ -28,6 +28,7 @@
 #include "esp_system.h"
 #include "t_embed_apps.h"
 #include "t_embed_sdlog.h"
+#include "t_embed_wifisniff.h"
 #endif
 
 /* Vendor S3 adctrig uses the 64 KiB aperture at 0x3fcd0000 (MAC_DUMP_USAGE=4).
@@ -315,6 +316,48 @@ static void handle_command(char *line) {
 #ifdef ESP_SDR_T_EMBED_APPS
     /* Session persistence. The card is the only artifact that survives a walk:
      * the RAM event ring and the IQ buffer do not. */
+    if (!strncmp(line, "WIFI SNIFF", 10)) {
+        const char *arg = line + 10;
+        while (*arg == ' ') arg++;
+        if (!strncmp(arg, "STOP", 4)) {
+            t_embed_wifisniff_stop();
+            reply("OK WIFI STOP\n");
+            return;
+        }
+        if (!strncmp(arg, "START", 5)) {
+            unsigned channel = 0, explicit_channel = 0;
+            char extra;
+            if (sscanf(arg + 5, " %u %c", &explicit_channel, &extra) == 1 &&
+                explicit_channel >= 1u && explicit_channel <= 14u) {
+                channel = explicit_channel;
+            }
+            if (!channel) {
+                /* Follow the tuned frequency when it sits on a Wi-Fi channel;
+                 * otherwise fall back to the middle of the band. */
+                channel = (frequency_mhz >= 2412u && frequency_mhz <= 2472u &&
+                           (frequency_mhz - 2412u) % 5u == 0u)
+                              ? (frequency_mhz - 2407u) / 5u
+                              : 6u;
+            }
+            char answer[96];
+            if (t_embed_wifisniff_start(channel)) {
+                snprintf(answer, sizeof(answer), "OK WIFI SNIFF %u %s\n", channel,
+                         t_embed_wifisniff_recording() ? "pcap" : "count-only");
+            } else {
+                snprintf(answer, sizeof(answer), "ERR wifi\n");
+            }
+            reply(answer);
+            return;
+        }
+        reply("ERR args\n");
+        return;
+    }
+    if (!strcmp(line, "WIFI?")) {
+        static char wifi_json[384];
+        t_embed_wifisniff_status_json(wifi_json, sizeof(wifi_json));
+        reply(wifi_json);
+        return;
+    }
     if (!strcmp(line, "SD?")) {
         static char status[384];
         t_embed_sdlog_status_json(status, sizeof(status));
@@ -394,9 +437,8 @@ static void handle_command(char *line) {
         }
         snprintf(capture_label, sizeof(capture_label), "%s", label);
         capture_to_card = true;
-        bool ok = capture(samples, rate, 16); /* IQ8 -> SigMF ci8 */
+        (void)capture(samples, rate, 16); /* IQ8 -> SigMF ci8; replies REC/ERR */
         capture_to_card = false;
-        if (!ok) reply("ERR capture\n");
         return;
     }
 #endif
@@ -568,6 +610,7 @@ void app_main(void) {
     int64_t lease_deadline=0;
     for(;;) {
 #ifdef ESP_SDR_T_EMBED_APPS
+        t_embed_wifisniff_service();
         if (ui_ready && t_embed_ui_home_requested()) esp_restart();
 #endif
         if(esp_timer_get_time()>=lease_deadline)owner=-1;

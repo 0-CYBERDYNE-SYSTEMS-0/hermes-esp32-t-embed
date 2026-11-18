@@ -76,6 +76,8 @@ bool t_embed_sdlog_ready(void) { return s_mounted; }
 
 const char *t_embed_sdlog_session(void) { return s_logging ? s_session_stamp : ""; }
 
+const char *t_embed_sdlog_dir(void) { return s_logging ? s_session_dir : ""; }
+
 void t_embed_sdlog_set_interval_ms(unsigned ms) {
     if (ms >= 20u && ms <= 60000u) s_min_interval_ms = ms;
 }
