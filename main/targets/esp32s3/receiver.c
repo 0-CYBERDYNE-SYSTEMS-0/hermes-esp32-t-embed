@@ -29,6 +29,9 @@
 #include "t_embed_apps.h"
 #include "t_embed_sdlog.h"
 #include "t_embed_wifisniff.h"
+
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 /* Vendor S3 adctrig uses the 64 KiB aperture at 0x3fcd0000 (MAC_DUMP_USAGE=4).
@@ -90,6 +93,67 @@ int cmd_parse(char *cmd,char *name,int *argc,char **argv) {
 }
 #define send_bytes burst_serial_send
 static void reply(const char *s) { (void)send_bytes(s,strlen(s)); }
+
+#ifdef ESP_SDR_T_EMBED_APPS
+/* Card readback: without it the only way to see a session is to pull the
+ * card, which makes field verification impossible and moving a finished
+ * session to a host needlessly manual. */
+static void sd_list_dir(const char *path, unsigned depth) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        reply("ERR dir\n");
+        return;
+    }
+    struct dirent *entry;
+    char child[320];
+    char answer[400];
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+        snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        struct stat st;
+        if (stat(child, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            snprintf(answer, sizeof(answer), "DIR %s\n", child);
+            reply(answer);
+            if (depth < 2u) sd_list_dir(child, depth + 1u);
+        } else {
+            snprintf(answer, sizeof(answer), "FILE %s %u\n", child, (unsigned)st.st_size);
+            reply(answer);
+        }
+    }
+    closedir(dir);
+}
+
+static void sd_send_file(const char *path) {
+    if (strncmp(path, "/sdcard/", 8) || strstr(path, "..")) {
+        reply("ERR path\n");
+        return;
+    }
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        reply("ERR open\n");
+        return;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        reply("ERR seek\n");
+        return;
+    }
+    long size = ftell(file);
+    rewind(file);
+    char header[64];
+    snprintf(header, sizeof(header), "FILE %ld\n", size);
+    reply(header);
+    bool ok = true;
+    uint8_t chunk[512];
+    size_t got;
+    while (ok && (got = fread(chunk, 1, sizeof(chunk), file)) > 0) {
+        ok = send_bytes(chunk, got);
+    }
+    fclose(file);
+    if (ok) reply("END\n");
+}
+#endif
 #include "burst_gain.h"
 #include "burst_limits.h"
 
@@ -366,6 +430,30 @@ static void handle_command(char *line) {
     }
     if (!strcmp(line, "SD MOUNT")) {
         reply(t_embed_sdlog_mount() ? "OK SD\n" : "ERR SD\n");
+        return;
+    }
+    if (!strncmp(line, "SD LS", 5)) {
+        char path[300];
+        const char *arg = line + 5;
+        while (*arg == ' ') arg++;
+        const char *session_dir = t_embed_sdlog_dir();
+        if (*arg) snprintf(path, sizeof(path), "%s", arg);
+        else if (session_dir[0]) snprintf(path, sizeof(path), "%s", session_dir);
+        else snprintf(path, sizeof(path), "/sdcard/sigint");
+        if (strncmp(path, "/sdcard/", 8) || strstr(path, "..")) {
+            reply("ERR path\n");
+            return;
+        }
+        sd_list_dir(path, 0);
+        reply("END\n");
+        return;
+    }
+    if (!strncmp(line, "SDFILE ", 7)) {
+        char path[300];
+        snprintf(path, sizeof(path), "%s", line + 7);
+        size_t len = strlen(path);
+        while (len && path[len - 1u] == ' ') path[--len] = '\0';
+        sd_send_file(path);
         return;
     }
     if (!strcmp(line, "TIME?")) {
