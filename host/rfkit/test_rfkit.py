@@ -389,51 +389,56 @@ class ThreatTests(unittest.TestCase):
             self.assertIn("VERDICT: CLEAN", html)
 
 
+def make_card_session(root: Path) -> Path:
+    """A session exactly as the device writes it to /sdcard/sigint."""
+    session = root / "20261118-230405"
+    (session / "iq").mkdir(parents=True)
+    (session / "net").mkdir(parents=True)
+    (session / "session.json").write_text(json.dumps({
+        "schema": "tembed-sigint/1", "board": "lilygo-t-embed-s3r8",
+        "build": "abc1234", "session": "20261118-230405", "label": "walk",
+        "started_unix_ms": 1763500000123, "started_iso": "2025-11-18T21:06:40.123Z",
+        "time_source": "host", "lo_mhz": 2437, "rate_code": 6,
+        "rate_hz": 16000000, "nfft": NFFT, "lpf_code": 0, "gain_index": 3,
+        "battery_mv": 0,
+    }))
+    frames = []
+    for i in range(30):
+        codes = [30 + (j * 7) % 5 for j in range(NFFT)]
+        codes[200] = 190
+        frames.append(json.dumps({
+            "seq": i, "t_ms": i * 1000, "t_s": float(i),
+            "ts": "2025-11-18T21:06:41.123Z", "lo_mhz": 2437,
+            "nfft": NFFT, "rate_hz": RATE, "gain": 3,
+            "floor_code": sorted(codes)[max(0, int(0.2 * NFFT) - 1)],
+            "codes": codes,
+        }))
+    (session / "frames.ndjson").write_text("\n".join(frames) + "\n")
+    (session / "events.ndjson").write_text(json.dumps({
+        "t_ms": 12000, "ts": "2025-11-18T21:06:52.123Z", "khz": 2441000,
+        "level": "CONCERN", "reason": 5, "over_floor": 34}) + "\n")
+    meta = {
+        "global": {"core:datatype": "ci8", "core:sample_rate": RATE,
+                   "core:version": "1.2.6", "core:recorder": "esp_sdr",
+                   "esp_sdr:rate_code": 6, "esp_sdr:gain_index": 3},
+        "captures": [{"core:sample_start": 0, "core:frequency": 2437e6}],
+        "annotations": [],
+    }
+    stem = session / "iq" / "000042-0001-ble"
+    stem.with_suffix(".sigmf-meta").write_text(json.dumps(meta))
+    stem.with_suffix(".sigmf-data").write_bytes(bytes(2000))  # 1000 ci8 samples
+    shb = struct.pack("<IIIHHqI", 0x0A0D0D0A, 28, 0x1A2B3C4D, 1, 0, -1, 28)
+    idb = struct.pack("<IIHHII", 1, 20, 127, 0, 1600, 20)
+    epb = struct.pack("<IIIIIII", 6, 32 + 8, 0, 0, 0, 8, 8) + b"\x00" * 8 + struct.pack("<I", 40)
+    (session / "net" / "wifi-42.pcapng").write_bytes(shb + idb + epb + epb)
+    return session
+
+
 class CardSessionTests(unittest.TestCase):
     """A session pulled off the device card must read without the device."""
 
     def make_session(self, root: Path) -> Path:
-        session = root / "20261118-230405"
-        (session / "iq").mkdir(parents=True)
-        (session / "net").mkdir(parents=True)
-        (session / "session.json").write_text(json.dumps({
-            "schema": "tembed-sigint/1", "board": "lilygo-t-embed-s3r8",
-            "build": "abc1234", "session": "20261118-230405", "label": "walk",
-            "started_unix_ms": 1763500000123, "started_iso": "2025-11-18T21:06:40.123Z",
-            "time_source": "host", "lo_mhz": 2437, "rate_code": 6,
-            "rate_hz": 16000000, "nfft": NFFT, "lpf_code": 0, "gain_index": 3,
-            "battery_mv": 0,
-        }))
-        frames = []
-        for i in range(30):
-            codes = [30 + (j * 7) % 5 for j in range(NFFT)]
-            codes[200] = 190
-            frames.append(json.dumps({
-                "seq": i, "t_ms": i * 1000, "t_s": float(i),
-                "ts": "2025-11-18T21:06:41.123Z", "lo_mhz": 2437,
-                "nfft": NFFT, "rate_hz": RATE, "gain": 3,
-                "floor_code": sorted(codes)[max(0, int(0.2 * NFFT) - 1)],
-                "codes": codes,
-            }))
-        (session / "frames.ndjson").write_text("\n".join(frames) + "\n")
-        (session / "events.ndjson").write_text(json.dumps({
-            "t_ms": 12000, "ts": "2025-11-18T21:06:52.123Z", "khz": 2441000,
-            "level": "CONCERN", "reason": 5, "over_floor": 34}) + "\n")
-        meta = {
-            "global": {"core:datatype": "ci8", "core:sample_rate": RATE,
-                       "core:version": "1.2.6", "core:recorder": "esp_sdr",
-                       "esp_sdr:rate_code": 6, "esp_sdr:gain_index": 3},
-            "captures": [{"core:sample_start": 0, "core:frequency": 2437e6}],
-            "annotations": [],
-        }
-        stem = session / "iq" / "000042-0001-ble"
-        stem.with_suffix(".sigmf-meta").write_text(json.dumps(meta))
-        stem.with_suffix(".sigmf-data").write_bytes(bytes(2000))  # 1000 ci8 samples
-        shb = struct.pack("<IIIHHqI", 0x0A0D0D0A, 28, 0x1A2B3C4D, 1, 0, -1, 28)
-        idb = struct.pack("<IIHHII", 1, 20, 127, 0, 1600, 20)
-        epb = struct.pack("<IIIIIII", 6, 32 + 8, 0, 0, 0, 8, 8) + b"\x00" * 8 + struct.pack("<I", 40)
-        (session / "net" / "wifi-42.pcapng").write_bytes(shb + idb + epb + epb)
-        return session
+        return make_card_session(root)
 
     def test_ndjson_frames_load(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -492,6 +497,68 @@ class CardSessionTests(unittest.TestCase):
             self.assertEqual(len(inventory["captures"]), 1)
             self.assertTrue((session / "report.json").exists())
             self.assertGreater(inventory["signals"], 0)
+
+
+class DashboardTests(unittest.TestCase):
+    """The dashboard must serve a real session over HTTP, and nothing else."""
+
+    def setUp(self):
+        import threading
+        import dashboard
+        self.tmp = tempfile.TemporaryDirectory()
+        self.session = make_card_session(Path(self.tmp.name))
+        self.server = dashboard.make_server(self.session, "127.0.0.1", 0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        self.tmp.cleanup()
+
+    def get(self, path: str):
+        import urllib.request
+        with urllib.request.urlopen(self.base + path, timeout=5) as response:
+            return response.status, response.read()
+
+    def test_page_renders_without_external_assets(self):
+        status, body = self.get("/")
+        page = body.decode()
+        self.assertEqual(status, 200)
+        self.assertIn("Waterfall", page)
+        self.assertNotIn("http://", page.replace("http://127.0.0.1", ""))
+        self.assertNotIn("cdn", page.lower())
+
+    def test_frames_api_reports_the_session(self):
+        status, body = self.get("/api/frames")
+        state = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(state["frames"], 30)
+        self.assertEqual(len(state["waterfall"]), 30)
+        self.assertEqual(state["lo_mhz"], 2437)
+        self.assertTrue(state["peaks"])
+
+    def test_session_api_lists_artifacts(self):
+        _, body = self.get("/api/session")
+        inventory = json.loads(body)
+        self.assertEqual(inventory["manifest"]["build"], "abc1234")
+        self.assertTrue(inventory["recordings"])
+        self.assertTrue(inventory["captures"])
+        self.assertEqual(len(inventory["events"]), 1)
+
+    def test_file_download_serves_session_bytes(self):
+        _, body = self.get("/files/frames.ndjson")
+        self.assertIn(b'"codes"', body)
+        _, pcap = self.get("/files/net/wifi-42.pcapng")
+        self.assertEqual(pcap[:4], b"\x0a\x0d\x0d\x0a")
+
+    def test_path_traversal_is_refused(self):
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get("/files/../../../../etc/passwd")
+        self.assertIn(caught.exception.code, (403, 404))
 
 
 if __name__ == "__main__":

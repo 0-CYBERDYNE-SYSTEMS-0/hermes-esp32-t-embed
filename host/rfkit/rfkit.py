@@ -894,6 +894,11 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    import dashboard
+    return dashboard.serve(Path(args.session), host=args.bind, port=args.port)
+
+
 # --------------------------------------------------------------------- utils
 
 def make_session_dir(explicit, kind: str) -> Path:
@@ -963,6 +968,12 @@ def main() -> int:
                    help="session directory copied from /sdcard/sigint/<stamp>")
     p.add_argument("--threshold", type=float, default=10.0)
     p.set_defaults(fn=cmd_ingest)
+
+    p = sub.add_parser("serve", help="live dashboard for a session directory")
+    p.add_argument("session", type=Path)
+    p.add_argument("--bind", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8080)
+    p.set_defaults(fn=cmd_serve)
 
     args = ap.parse_args()
     return args.fn(args)
