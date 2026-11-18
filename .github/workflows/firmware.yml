@@ -23,6 +23,8 @@ jobs:
           submodules: recursive
       - name: Test artifact export
         run: python3 -m unittest discover -s tests
+      - name: Test host toolkit
+        run: python3 -m unittest discover -s host/rfkit -p 'test_*.py'
       - id: catalog
         run: echo "matrix=$(python3 tools/build_firmware.py --matrix)" >> "$GITHUB_OUTPUT"
 
