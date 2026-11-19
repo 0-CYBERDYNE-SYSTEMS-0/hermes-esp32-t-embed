@@ -693,6 +693,13 @@ void app_main(void) {
     reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_SPIRAM);
     if (!reply_scratch)
         reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_8BIT);
+    /* The app silences all logs; card and sniffer diagnostics are worth their
+     * bytes on the wire when a bench is diagnosing a dead slot. */
+    esp_log_level_set("sdlog", ESP_LOG_INFO);
+    esp_log_level_set("wifisniff", ESP_LOG_INFO);
+    esp_log_level_set("fatfs", ESP_LOG_INFO);
+    esp_log_level_set("sdspi", ESP_LOG_INFO);
+    esp_log_level_set("sdmmc", ESP_LOG_INFO);
 #endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
 #ifdef ESP_SDR_T_EMBED_APPS
@@ -705,15 +712,26 @@ void app_main(void) {
     int owner=-1;
     int64_t lease_deadline=0;
     for(;;) {
+        bool sniffing = false;
 #ifdef ESP_SDR_T_EMBED_APPS
         t_embed_wifisniff_service();
         if (ui_ready && t_embed_ui_home_requested()) esp_restart();
+        /* One radio, one owner at a time: with the 802.11 sniffer active the
+         * raw dump path corrupts the MAC's RX state (proven by a StoreProhibited
+         * panic in the Wi-Fi driver when both ran), so the capture windows stop
+         * while frames are being collected and resume when it stops. The
+         * console, knob and screen keep running — skipping the whole loop made
+         * the sniffer unqueryable and unstoppable from the wire. */
+        sniffing = t_embed_wifisniff_active();
 #endif
         if(esp_timer_get_time()>=lease_deadline)owner=-1;
 #if CONFIG_ESP_SDR_T_EMBED_UI
         if (ui_ready) {
             unsigned before_control_frequency = frequency_mhz;
             bool changed = t_embed_ui_poll_controls(&frequency_mhz);
+            /* The sniffer owns the radio: a knob turn may still switch views,
+             * but it must not retune or reset the PHY underneath the sniffer. */
+            if (sniffing) frequency_mhz = before_control_frequency;
             if (frequency_mhz != before_control_frequency) {
                 rx_ready = false;
                 prepare_rx();
@@ -739,7 +757,7 @@ void app_main(void) {
         int status=burst_serial_poll_line(line,sizeof(line));
         if(!status) {
 #if CONFIG_ESP_SDR_T_EMBED_UI
-            if (ui_ready && t_embed_ui_capture_due(esp_timer_get_time())) {
+            if (ui_ready && !sniffing && t_embed_ui_capture_due(esp_timer_get_time())) {
                 unsigned rate = t_embed_ui_rate_code();
                 unsigned nfft = 1024u;
                 uint32_t prior_seq = 0, new_seq = 0;
@@ -775,7 +793,7 @@ void app_main(void) {
                 continue;
             }
 #endif
-            vTaskDelay(1);
+            vTaskDelay(sniffing ? pdMS_TO_TICKS(10) : 1);
             continue;
         }
         int port=burst_serial_port();

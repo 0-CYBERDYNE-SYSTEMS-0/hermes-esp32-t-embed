@@ -6,7 +6,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "driver/sdspi_host.h"
+#include "driver/gpio.h"
+#include "driver/sdmmc_host.h"
 #include "driver/spi_common.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -33,6 +34,7 @@ static const char *kTag = "sdlog";
 static sdmmc_card_t *s_card;
 static bool s_mounted;
 static int64_t s_last_mount_attempt_us;
+static char s_last_err[48] = "never attempted";
 
 static bool s_clock_synced;
 static int64_t s_clock_offset_ms; /* wall - uptime */
@@ -98,35 +100,47 @@ bool t_embed_sdlog_mount(void) {
     }
     s_last_mount_attempt_us = now;
 
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;
-    spi_bus_config_t bus = {
-        .mosi_io_num = SD_PIN_MOSI,
-        .miso_io_num = SD_PIN_MISO,
-        .sclk_io_num = SD_PIN_SCK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
+    /* Diagnose on the wire: the mount path logs which step fails, and the
+     * app runs with all logs silenced. Restore the silence afterwards. */
+    esp_log_level_set("*", ESP_LOG_INFO);
+
+    /* The T-Embed TF slot is wired to the SDMMC controller in 1-bit mode
+     * (LILYGO's own example: CLK 40, CMD 41, D0 38, DAT3 held high so the
+     * card stays in SDMMC mode instead of falling back to SPI). */
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot = SDMMC_HOST_SLOT_0;
+    host.flags &= ~(uint32_t)(SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_8BIT |
+                              SDMMC_HOST_FLAG_DDR);
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot.clk = (gpio_num_t)SD_PIN_SCK;
+    slot.cmd = (gpio_num_t)SD_PIN_MOSI;
+    slot.d0 = (gpio_num_t)SD_PIN_MISO;
+    slot.width = 1;
+    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    /* DAT3 idle-high: without it the card enters SPI mode and never answers
+     * the SDMMC controller. */
+    gpio_config_t dat3 = {
+        .pin_bit_mask = 1ULL << SD_PIN_CS,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
     };
-    esp_err_t err = spi_bus_initialize(host.slot, &bus, SDSPI_DEFAULT_DMA);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "spi bus: %s", esp_err_to_name(err));
-        return false;
-    }
-    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.gpio_cs = (gpio_num_t)SD_PIN_CS;
-    slot.host_id = host.slot;
+    gpio_config(&dat3);
+    gpio_set_level((gpio_num_t)SD_PIN_CS, 1);
     esp_vfs_fat_mount_config_t config = {
         .format_if_mount_failed = false,
         .max_files = 6,
         .allocation_unit_size = 16 * 1024,
     };
-    err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot, &config, &s_card);
+    esp_err_t err = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &config, &s_card);
     if (err != ESP_OK) {
+        snprintf(s_last_err, sizeof(s_last_err), "mount %s", esp_err_to_name(err));
         ESP_LOGW(kTag, "no card: %s", esp_err_to_name(err));
         return false;
     }
+    s_last_err[0] = '\0';
     s_mounted = true;
+    esp_log_level_set("*", ESP_LOG_NONE);
     if (!ensure_line_buffer()) {
         ESP_LOGW(kTag, "no line buffer; logging disabled");
     }
@@ -143,13 +157,15 @@ void t_embed_sdlog_status_json(char *out, size_t cap) {
     snprintf(out, cap,
              "{\"mounted\":%u,\"card_kb\":%llu,\"free_kb\":%llu,\"logging\":%u,"
              "\"session\":\"%s\",\"frames\":%lu,\"dropped\":%lu,\"events\":%lu,"
-             "\"iq_files\":%lu,\"clock_ms\":%lld,\"clock\":\"%s\",\"interval_ms\":%u}\n",
+             "\"iq_files\":%lu,\"clock_ms\":%lld,\"clock\":\"%s\",\"interval_ms\":%u,"
+             "\"last\":\"%s\"}\n",
              (unsigned)s_mounted, (unsigned long long)(total / 1024),
              (unsigned long long)(free_bytes / 1024), (unsigned)s_logging,
              s_logging ? s_session_stamp : "", (unsigned long)s_frames_written,
              (unsigned long)s_frames_dropped, (unsigned long)s_events_written,
              (unsigned long)s_iq_files, (long long)now_ms,
-             s_clock_synced ? "host" : "unsynced", s_min_interval_ms);
+             s_clock_synced ? "host" : "unsynced", s_min_interval_ms,
+             s_last_err);
 }
 
 static bool make_session_dir(void) {
