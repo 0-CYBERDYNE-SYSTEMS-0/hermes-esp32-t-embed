@@ -206,6 +206,11 @@ static bool probe_capture;
 #ifdef ESP_SDR_T_EMBED_APPS
 static bool capture_to_card;
 static char capture_label[24] = "iq";
+/* Reply JSON goes through one PSRAM scratch buffer: the SRAM guard leaves no
+ * room for reply-sized statics (the first build with them was 1200 bytes over
+ * the BSS limit), and the stack is safer left for the frame paths. */
+#define REPLY_SCRATCH_CAP 1024u
+static char *reply_scratch;
 static int t_embed_gain_arg(void) {
     return gain_mode == GAIN_HARDWARE ? -1 : (int)gain_code;
 }
@@ -417,15 +422,15 @@ static void handle_command(char *line) {
         return;
     }
     if (!strcmp(line, "WIFI?")) {
-        static char wifi_json[384];
-        t_embed_wifisniff_status_json(wifi_json, sizeof(wifi_json));
-        reply(wifi_json);
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_wifisniff_status_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
         return;
     }
     if (!strcmp(line, "SD?")) {
-        static char status[384];
-        t_embed_sdlog_status_json(status, sizeof(status));
-        reply(status);
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_sdlog_status_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
         return;
     }
     if (!strcmp(line, "SD MOUNT")) {
@@ -548,16 +553,16 @@ static void handle_command(char *line) {
         return;
     }
     if (!strcmp(line, "HUNT?")) {
-        static char hunt_json[1024];
-        t_embed_ui_hunt_json(hunt_json, sizeof(hunt_json));
-        reply(hunt_json);
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_ui_hunt_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
         reply("\n");
         return;
     }
     if (!strcmp(line, "LOG?")) {
-        static char log_json[1024];
-        t_embed_ui_log_json(log_json, sizeof(log_json));
-        reply(log_json);
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_ui_log_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
         reply("\n");
         return;
     }
@@ -685,6 +690,9 @@ void app_main(void) {
     /* HUNT flags reach the card through this hook; the RAM ring is only a
      * convenience for the screen. */
     t_embed_ui_set_event_hook(t_embed_sdlog_event_hook);
+    reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_SPIRAM);
+    if (!reply_scratch)
+        reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_8BIT);
 #endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
 #ifdef ESP_SDR_T_EMBED_APPS
