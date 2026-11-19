@@ -27,6 +27,11 @@
 #ifdef ESP_SDR_T_EMBED_APPS
 #include "esp_system.h"
 #include "t_embed_apps.h"
+#include "t_embed_sdlog.h"
+#include "t_embed_wifisniff.h"
+
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 /* Vendor S3 adctrig uses the 64 KiB aperture at 0x3fcd0000 (MAC_DUMP_USAGE=4).
@@ -88,6 +93,67 @@ int cmd_parse(char *cmd,char *name,int *argc,char **argv) {
 }
 #define send_bytes burst_serial_send
 static void reply(const char *s) { (void)send_bytes(s,strlen(s)); }
+
+#ifdef ESP_SDR_T_EMBED_APPS
+/* Card readback: without it the only way to see a session is to pull the
+ * card, which makes field verification impossible and moving a finished
+ * session to a host needlessly manual. */
+static void sd_list_dir(const char *path, unsigned depth) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        reply("ERR dir\n");
+        return;
+    }
+    struct dirent *entry;
+    char child[320];
+    char answer[400];
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+        snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        struct stat st;
+        if (stat(child, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            snprintf(answer, sizeof(answer), "DIR %s\n", child);
+            reply(answer);
+            if (depth < 2u) sd_list_dir(child, depth + 1u);
+        } else {
+            snprintf(answer, sizeof(answer), "FILE %s %u\n", child, (unsigned)st.st_size);
+            reply(answer);
+        }
+    }
+    closedir(dir);
+}
+
+static void sd_send_file(const char *path) {
+    if (strncmp(path, "/sdcard/", 8) || strstr(path, "..")) {
+        reply("ERR path\n");
+        return;
+    }
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        reply("ERR open\n");
+        return;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        reply("ERR seek\n");
+        return;
+    }
+    long size = ftell(file);
+    rewind(file);
+    char header[64];
+    snprintf(header, sizeof(header), "FILE %ld\n", size);
+    reply(header);
+    bool ok = true;
+    uint8_t chunk[512];
+    size_t got;
+    while (ok && (got = fread(chunk, 1, sizeof(chunk), file)) > 0) {
+        ok = send_bytes(chunk, got);
+    }
+    fclose(file);
+    if (ok) reply("END\n");
+}
+#endif
 #include "burst_gain.h"
 #include "burst_limits.h"
 
@@ -136,6 +202,24 @@ static unsigned probe_source,probe_clock,probe_adc=4;
 extern void rom_dac_rate_set(unsigned);
 static bool probe_capture;
 #endif
+/* Marks / labels owned by the SDR app's logging path. */
+#ifdef ESP_SDR_T_EMBED_APPS
+static bool capture_to_card;
+static char capture_label[24] = "iq";
+/* Reply JSON goes through one PSRAM scratch buffer: the SRAM guard leaves no
+ * room for reply-sized statics (the first build with them was 1200 bytes over
+ * the BSS limit), and the stack is safer left for the frame paths. */
+#define REPLY_SCRATCH_CAP 1024u
+static char *reply_scratch;
+static int t_embed_gain_arg(void) {
+    return gain_mode == GAIN_HARDWARE ? -1 : (int)gain_code;
+}
+static void t_embed_sdlog_event_hook(unsigned khz, const char *level,
+                                     unsigned reason, int over_floor) {
+    t_embed_sdlog_note_event(khz, level, reason, over_floor);
+}
+#endif
+
 static bool capture(unsigned n,unsigned divider,unsigned format) {
     if(divider!=0 && divider!=1 && divider!=6){reply("ERR rate\n");return false;}
     prepare_rx();
@@ -179,6 +263,18 @@ static bool capture(unsigned n,unsigned divider,unsigned format) {
     }
     size_t bytes=wire_size(n,format);
     if(format==16)pack_iq8(n);else if(format==20)pack_iq(n);
+#ifdef ESP_SDR_T_EMBED_APPS
+    if(capture_to_card) {
+        bool stored=t_embed_sdlog_write_iq((const uint8_t *)IQ_BUFFER,bytes,n,
+                                           divider,frequency_mhz,t_embed_gain_arg(),
+                                           capture_label);
+        char h[64];
+        snprintf(h,sizeof(h),"REC %u %04" PRIx32 " %s\n",n,
+                 esp_rom_crc32_le(0,(const uint8_t *)IQ_BUFFER,bytes),
+                 stored?"sd":"fail");
+        return send_bytes(h,strlen(h));
+    }
+#endif
     uint32_t crc=esp_rom_crc32_le(0,(const uint8_t *)IQ_BUFFER,bytes);
     char h[96];
     snprintf(h,sizeof(h),"DATA %u %08" PRIx32 " %" PRIu32 "\n",n,crc,elapsed);
@@ -286,6 +382,159 @@ static bool ring_command(const char *line) {
 }
 
 static void handle_command(char *line) {
+#ifdef ESP_SDR_T_EMBED_APPS
+    /* Session persistence. The card is the only artifact that survives a walk:
+     * the RAM event ring and the IQ buffer do not. */
+    if (!strncmp(line, "WIFI SNIFF", 10)) {
+        const char *arg = line + 10;
+        while (*arg == ' ') arg++;
+        if (!strncmp(arg, "STOP", 4)) {
+            t_embed_wifisniff_stop();
+            reply("OK WIFI STOP\n");
+            return;
+        }
+        if (!strncmp(arg, "START", 5)) {
+            unsigned channel = 0, explicit_channel = 0;
+            char extra;
+            if (sscanf(arg + 5, " %u %c", &explicit_channel, &extra) == 1 &&
+                explicit_channel >= 1u && explicit_channel <= 14u) {
+                channel = explicit_channel;
+            }
+            if (!channel) {
+                /* Follow the tuned frequency when it sits on a Wi-Fi channel;
+                 * otherwise fall back to the middle of the band. */
+                channel = (frequency_mhz >= 2412u && frequency_mhz <= 2472u &&
+                           (frequency_mhz - 2412u) % 5u == 0u)
+                              ? (frequency_mhz - 2407u) / 5u
+                              : 6u;
+            }
+            char answer[96];
+            if (t_embed_wifisniff_start(channel)) {
+                snprintf(answer, sizeof(answer), "OK WIFI SNIFF %u %s\n", channel,
+                         t_embed_wifisniff_recording() ? "pcap" : "count-only");
+            } else {
+                snprintf(answer, sizeof(answer), "ERR wifi\n");
+            }
+            reply(answer);
+            return;
+        }
+        reply("ERR args\n");
+        return;
+    }
+    if (!strcmp(line, "WIFI?")) {
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_wifisniff_status_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
+        return;
+    }
+    if (!strcmp(line, "SD?")) {
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_sdlog_status_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
+        return;
+    }
+    if (!strcmp(line, "SD MOUNT")) {
+        reply(t_embed_sdlog_mount() ? "OK SD\n" : "ERR SD\n");
+        return;
+    }
+    if (!strncmp(line, "SD LS", 5)) {
+        char path[300];
+        const char *arg = line + 5;
+        while (*arg == ' ') arg++;
+        const char *session_dir = t_embed_sdlog_dir();
+        if (*arg) snprintf(path, sizeof(path), "%s", arg);
+        else if (session_dir[0]) snprintf(path, sizeof(path), "%s", session_dir);
+        else snprintf(path, sizeof(path), "/sdcard/sigint");
+        if (strncmp(path, "/sdcard/", 8) || strstr(path, "..")) {
+            reply("ERR path\n");
+            return;
+        }
+        sd_list_dir(path, 0);
+        reply("END\n");
+        return;
+    }
+    if (!strncmp(line, "SDFILE ", 7)) {
+        char path[300];
+        snprintf(path, sizeof(path), "%s", line + 7);
+        size_t len = strlen(path);
+        while (len && path[len - 1u] == ' ') path[--len] = '\0';
+        sd_send_file(path);
+        return;
+    }
+    if (!strcmp(line, "TIME?")) {
+        char answer[64];
+        long long now = (long long)t_embed_sdlog_now_ms();
+        snprintf(answer, sizeof(answer), "TIME %lld %s\n", now,
+                 now > 0 ? "host" : "unsynced");
+        reply(answer);
+        return;
+    }
+    if (!strncmp(line, "TIME ", 5)) {
+        long long ms = 0;
+        char extra;
+        if (sscanf(line, "TIME %lld %c", &ms, &extra) == 1 && ms > 0 &&
+            t_embed_sdlog_set_clock((int64_t)ms)) {
+            char answer[64];
+            snprintf(answer, sizeof(answer), "OK TIME %lld\n", (long long)ms);
+            reply(answer);
+        } else {
+            reply("ERR time\n");
+        }
+        return;
+    }
+    if (!strncmp(line, "LOGRATE ", 8)) {
+        unsigned ms = 0;
+        char extra;
+        if (sscanf(line, "LOGRATE %u %c", &ms, &extra) == 1) {
+            t_embed_sdlog_set_interval_ms(ms);
+            reply("OK\n");
+        } else {
+            reply("ERR args\n");
+        }
+        return;
+    }
+    if (!strncmp(line, "LOG START", 9)) {
+        char label[24] = "session";
+        (void)sscanf(line + 9, " %23s", label);
+        unsigned nfft = 1024u;
+        bool started = t_embed_sdlog_start(label, ring_capture_rate_hz(t_embed_ui_rate_code()),
+                                          nfft, frequency_mhz, t_embed_ui_rate_code(),
+                                          rx_filter > 0 ? (unsigned)rx_filter : 0u,
+                                          t_embed_gain_arg());
+        char answer[96];
+        if (started)
+            snprintf(answer, sizeof(answer), "OK LOG %s\n", t_embed_sdlog_session());
+        else
+            snprintf(answer, sizeof(answer), "ERR log\n");
+        reply(answer);
+        return;
+    }
+    if (!strcmp(line, "LOG STOP")) {
+        char answer[96];
+        t_embed_sdlog_stop();
+        snprintf(answer, sizeof(answer), "OK LOG STOP %lu\n",
+                 (unsigned long)t_embed_sdlog_frames_written());
+        reply(answer);
+        return;
+    }
+    if (!strncmp(line, "LOGREC", 6)) {
+        unsigned samples = 16380u, rate = 6u;
+        char label[24] = "iq";
+        char extra;
+        int fields = sscanf(line + 6, " %u %u %23s %c", &samples, &rate, label, &extra);
+        if (fields == 4) { reply("ERR args\n"); return; }
+        if (samples < 256u || samples > IQ_WORDS ||
+            (rate != 0u && rate != 1u && rate != 6u)) {
+            reply("ERR args\n");
+            return;
+        }
+        snprintf(capture_label, sizeof(capture_label), "%s", label);
+        capture_to_card = true;
+        (void)capture(samples, rate, 16); /* IQ8 -> SigMF ci8; replies REC/ERR */
+        capture_to_card = false;
+        return;
+    }
+#endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
     if (!strcmp(line, "UI?")) {
         t_embed_ui_stats_t s;
@@ -304,16 +553,16 @@ static void handle_command(char *line) {
         return;
     }
     if (!strcmp(line, "HUNT?")) {
-        static char hunt_json[1024];
-        t_embed_ui_hunt_json(hunt_json, sizeof(hunt_json));
-        reply(hunt_json);
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_ui_hunt_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
         reply("\n");
         return;
     }
     if (!strcmp(line, "LOG?")) {
-        static char log_json[1024];
-        t_embed_ui_log_json(log_json, sizeof(log_json));
-        reply(log_json);
+        if (!reply_scratch) { reply("ERR mem\n"); return; }
+        t_embed_ui_log_json(reply_scratch, REPLY_SCRATCH_CAP);
+        reply(reply_scratch);
         reply("\n");
         return;
     }
@@ -437,6 +686,14 @@ void app_main(void) {
     ESP_ERROR_CHECK(usb_serial_jtag_driver_uninstall());
     burst_serial_init();
     ring_capture_init();
+#ifdef ESP_SDR_T_EMBED_APPS
+    /* HUNT flags reach the card through this hook; the RAM ring is only a
+     * convenience for the screen. */
+    t_embed_ui_set_event_hook(t_embed_sdlog_event_hook);
+    reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_SPIRAM);
+    if (!reply_scratch)
+        reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_8BIT);
+#endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
 #ifdef ESP_SDR_T_EMBED_APPS
     bool ui_ready = true;
@@ -449,6 +706,7 @@ void app_main(void) {
     int64_t lease_deadline=0;
     for(;;) {
 #ifdef ESP_SDR_T_EMBED_APPS
+        t_embed_wifisniff_service();
         if (ui_ready && t_embed_ui_home_requested()) esp_restart();
 #endif
         if(esp_timer_get_time()>=lease_deadline)owner=-1;
@@ -508,6 +766,11 @@ void app_main(void) {
                 if (ring_capture_latest_spectrum(&new_bins, &new_n, &new_seq) &&
                     new_seq != prior_seq && new_n == nfft) {
                     t_embed_ui_render_spectrum(new_bins, new_n);
+#ifdef ESP_SDR_T_EMBED_APPS
+                    t_embed_sdlog_note_frame(new_bins, new_n, frequency_mhz,
+                                             ring_capture_rate_hz(rate),
+                                             t_embed_gain_arg());
+#endif
                 }
                 continue;
             }

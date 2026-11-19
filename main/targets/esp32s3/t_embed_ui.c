@@ -161,6 +161,9 @@ static int hunt_target_idx = -1;  /* pinned target slot; -1 = auto */
 static uint8_t track_hist[64];    /* TRACK sparkline of the target needle */
 static unsigned track_hist_i;
 static volatile uint32_t key_latch;
+static t_embed_ui_event_hook_t event_hook;
+
+void t_embed_ui_set_event_hook(t_embed_ui_event_hook_t hook) { event_hook = hook; }
 
 static void IRAM_ATTR hunt_key_isr(void *arg) {
     (void)arg;
@@ -1919,7 +1922,14 @@ void t_embed_ui_render_spectrum(const uint8_t *bins, unsigned nfft) {
         threat_track_t *t = &hunt.track[i];
         if (!t->used) continue;
         if (t->level > hunt_logged_level[i]) {
-            if (t->level >= THREAT_LEVEL_WATCH) hunt_log_add(t->khz, t->level, t->reason);
+            if (t->level >= THREAT_LEVEL_WATCH) {
+                hunt_log_add(t->khz, t->level, t->reason);
+                /* Persistence hook: the 12-event RAM ring dies with the app,
+                 * the card does not. */
+                if (event_hook)
+                    event_hook(t->khz, hunt_level_word(t->level), t->reason,
+                               (int)t->code_max - (int)hunt.floor_code);
+            }
         }
         hunt_logged_level[i] = t->level;
     }

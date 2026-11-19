@@ -52,11 +52,14 @@ if(IDF_TARGET STREQUAL "esp32s3")
         list(APPEND sources "${target_dir}/t_embed_launcher.c"
                             "${target_dir}/t_embed_microphone.c"
                             "${target_dir}/t_embed_audio_input.c"
+                            "${target_dir}/t_embed_sdlog.c"
+                            "${target_dir}/t_embed_wifisniff.c"
                             "${target_dir}/t_embed_hermes.cpp"
                             "${target_dir}/t_embed_hermes_audio.cpp"
                             "${target_dir}/t_embed_hermes_transport.cpp")
         list(APPEND private_dependencies esp_codec_dev esp_websocket_client heap
-                                        mbedtls esp_event esp_netif esp_hw_support esp_system)
+                                        mbedtls esp_event esp_netif esp_hw_support esp_system
+                                        fatfs sdmmc esp_driver_sdspi)
     endif()
 elseif(IDF_TARGET STREQUAL "esp32c5" OR IDF_TARGET STREQUAL "esp32c6" OR IDF_TARGET STREQUAL "esp32c61")
     set(receiver "families/c5_c6_c61/receiver.c")
@@ -87,7 +90,16 @@ idf_component_register(SRCS "${receiver}" ${sources}
     LDFRAGMENTS ${fragments}
     PRIV_INCLUDE_DIRS "common" "${target_dir}" "diagnostics"
     REQUIRES ${dependencies}
-    PRIV_REQUIRES ${private_dependencies})
+    PRIV_REQUIRES ${private_dependencies}
+    # Literal repetition on purpose: the component manager rewrites the
+    # requirements of this component from its own scan, and requirement names
+    # that only ever live in a variable appended inside a conditional block
+    # were dropped from the build in practice (fatfs/sdmmc/esp_driver_sdspi
+    # never reached the component graph).
+    fatfs sdmmc esp_driver_sdspi)
+
+message(STATUS "main requires=[${dependencies}]")
+message(STATUS "main priv requires=[${private_dependencies}]")
 
 if(ESP_SDR_T_EMBED_APPS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESP_SDR_T_EMBED_APPS=1)
