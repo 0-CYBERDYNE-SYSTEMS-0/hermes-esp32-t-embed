@@ -98,7 +98,10 @@ static bool open_capture(void) {
 
 bool t_embed_wifisniff_start(unsigned channel) {
     if (s_active) return true;
-    if (!t_embed_sdlog_mount()) return false;
+    /* A card is optional: counting frames without writing them still answers
+     * the field question "is anything on this channel", and the PHY-contention
+     * spike does not need storage. */
+    t_embed_sdlog_mount();
     if (!s_slots) {
         s_slots = (ws_slot_t *)heap_caps_malloc(WS_QUEUE_BYTES, MALLOC_CAP_SPIRAM);
         if (!s_slots) s_slots = (ws_slot_t *)heap_caps_malloc(WS_QUEUE_BYTES, MALLOC_CAP_8BIT);
