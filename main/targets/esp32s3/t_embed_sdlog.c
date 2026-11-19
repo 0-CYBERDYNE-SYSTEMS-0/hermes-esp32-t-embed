@@ -128,7 +128,7 @@ bool t_embed_sdlog_mount(void) {
         .max_files = 6,
         .allocation_unit_size = 16 * 1024,
     };
-    err = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &config, &s_card);
+    esp_err_t err = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &config, &s_card);
     if (err != ESP_OK) {
         snprintf(s_last_err, sizeof(s_last_err), "mount %s", esp_err_to_name(err));
         ESP_LOGW(kTag, "no card: %s", esp_err_to_name(err));
