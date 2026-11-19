@@ -715,6 +715,14 @@ void app_main(void) {
 #ifdef ESP_SDR_T_EMBED_APPS
         t_embed_wifisniff_service();
         if (ui_ready && t_embed_ui_home_requested()) esp_restart();
+        /* One radio, one owner at a time: with the 802.11 sniffer active the
+         * raw dump path corrupts the MAC's RX state (proven by a StoreProhibited
+         * panic in the Wi-Fi driver when both ran), so the capture windows stop
+         * while frames are being collected and resume when it stops. */
+        if (t_embed_wifisniff_active()) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
 #endif
         if(esp_timer_get_time()>=lease_deadline)owner=-1;
 #if CONFIG_ESP_SDR_T_EMBED_UI
