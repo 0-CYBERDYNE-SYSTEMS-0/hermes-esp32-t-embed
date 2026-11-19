@@ -119,6 +119,11 @@ void app_main(void) {
     t_embed_ui_render_launcher(selection);
     for (;;) {
         bool activate = false;
+        /* The knob poll writes activate unconditionally, so it runs first and
+         * the console decision lands after it. */
+        if (t_embed_ui_poll_launcher(&selection, &activate)) {
+            t_embed_ui_render_launcher(selection);
+        }
         if (console_ready) {
             int launch = console_poll();
             if (launch >= 0) {
@@ -126,9 +131,6 @@ void app_main(void) {
                 activate = true;
                 t_embed_ui_render_launcher(selection);
             }
-        }
-        if (t_embed_ui_poll_launcher(&selection, &activate)) {
-            t_embed_ui_render_launcher(selection);
         }
         if (activate) {
             console_hand_over();

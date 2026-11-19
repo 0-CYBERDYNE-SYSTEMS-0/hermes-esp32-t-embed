@@ -80,14 +80,23 @@ class Device:
         return self.readline(deadline_s)
 
     def wait_for(self, command: str, prefix: str, deadline_s: float = 20.0) -> tuple[bool, str]:
-        """Poll a command until its reply starts with prefix (app boot, etc.)."""
+        """Poll a command until its reply starts with prefix (app boot, etc.).
+
+        The input buffer is dropped before every attempt: boot text and any
+        stale output otherwise sit ahead of the fresh reply and every poll
+        reads a boot-log line instead of the answer.
+        """
         end = time.monotonic() + deadline_s
         last = ""
         while time.monotonic() < end:
-            last = self.ask(command, deadline_s=2.0)
+            try:
+                self.port.reset_input_buffer()
+            except (serial.SerialException, OSError, AttributeError):
+                pass
+            last = self.ask(command, deadline_s=1.0)
             if last.startswith(prefix):
                 return True, last
-            time.sleep(0.5)
+            time.sleep(0.4)
         return False, last
 
     def read_exact(self, count: int, deadline_s: float = 120.0) -> bytes:
@@ -115,27 +124,30 @@ class Device:
         return size
 
     def enter_sdr(self) -> str:
-        """Launcher console -> SDR app, tolerating the USB re-enumeration."""
+        """Launcher console -> SDR app.
+
+        The port must NOT be reopened for this: on the ESP32-S3 USB-Serial/JTAG
+        a DTR/RTS transition (which close/open causes) resets the chip, which
+        would drop it straight back into the launcher. The CDC device stays
+        enumerated while the app swaps its driver, so keep the handle and just
+        wait for the app's CLI to answer.
+        """
         for attempt in range(3):
             try:
+                self.port.reset_input_buffer()
                 self.write("APP SDR")
                 reply = self.readline(deadline_s=3.0)
-                if not reply.startswith("APP SDR"):
-                    # maybe we are already inside the SDR app
-                    if self.ask("INFO", 2.0).startswith("S3SDR"):
-                        return "already-in-sdr"
-                    continue
+                if reply.startswith("APP SDR"):
+                    break
+                # stale line or a reset mid-flight: try again after settling
+                time.sleep(1.5)
             except (serial.SerialException, OSError):
-                pass
-            time.sleep(1.0)
-            try:
-                self.reopen(settle=1.2)
-            except (serial.SerialException, OSError):
-                time.sleep(2.0)
-                self.reopen(settle=1.5)
-            ok, line = self.wait_for("INFO", "S3SDR", deadline_s=20.0)
-            if ok:
-                return line
+                time.sleep(1.5)
+        else:
+            raise RuntimeError("launcher console did not accept APP SDR")
+        ok, line = self.wait_for("INFO", "S3SDR", deadline_s=25.0)
+        if ok:
+            return line
         raise RuntimeError("could not reach the SDR app")
 
 
