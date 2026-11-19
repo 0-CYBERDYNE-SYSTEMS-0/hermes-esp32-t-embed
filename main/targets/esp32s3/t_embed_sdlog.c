@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "driver/gpio.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
 #include "esp_err.h"
@@ -101,6 +102,15 @@ bool t_embed_sdlog_mount(void) {
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI3_HOST;
+    /* Bring-up conservatism: 1 MHz is plenty for 5 Hz frame logging and
+     * removes signal-integrity doubt while the slot is being proven. */
+    host.max_freq_khz = 1000;
+    /* The slot has no external pull-ups on this board; idle-high CS/MISO keeps
+     * cards from missing the initialization command. */
+    gpio_set_pull_mode((gpio_num_t)SD_PIN_MISO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode((gpio_num_t)SD_PIN_MOSI, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode((gpio_num_t)SD_PIN_SCK, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode((gpio_num_t)SD_PIN_CS, GPIO_PULLUP_ONLY);
     spi_bus_config_t bus = {
         .mosi_io_num = SD_PIN_MOSI,
         .miso_io_num = SD_PIN_MISO,
