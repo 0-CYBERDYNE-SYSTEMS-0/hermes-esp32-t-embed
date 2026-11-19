@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 #include "driver/gpio.h"
-#include "driver/sdspi_host.h"
+#include "driver/sdmmc_host.h"
 #include "driver/spi_common.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -100,34 +100,29 @@ bool t_embed_sdlog_mount(void) {
     }
     s_last_mount_attempt_us = now;
 
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI3_HOST;
-    /* Bring-up conservatism: 1 MHz is plenty for 5 Hz frame logging and
-     * removes signal-integrity doubt while the slot is being proven. */
-    host.max_freq_khz = 1000;
-    /* The slot has no external pull-ups on this board; idle-high CS/MISO keeps
-     * cards from missing the initialization command. */
-    gpio_set_pull_mode((gpio_num_t)SD_PIN_MISO, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode((gpio_num_t)SD_PIN_MOSI, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode((gpio_num_t)SD_PIN_SCK, GPIO_PULLUP_ONLY);
-    gpio_set_pull_mode((gpio_num_t)SD_PIN_CS, GPIO_PULLUP_ONLY);
-    spi_bus_config_t bus = {
-        .mosi_io_num = SD_PIN_MOSI,
-        .miso_io_num = SD_PIN_MISO,
-        .sclk_io_num = SD_PIN_SCK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
+    /* The T-Embed TF slot is wired to the SDMMC controller in 1-bit mode
+     * (LILYGO's own example: CLK 40, CMD 41, D0 38, DAT3 held high so the
+     * card stays in SDMMC mode instead of falling back to SPI). */
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot = SDMMC_HOST_SLOT_0;
+    host.flags &= ~(uint32_t)(SDMMC_HOST_FLAG_4BIT | SDMMC_HOST_FLAG_8BIT |
+                              SDMMC_HOST_FLAG_DDR);
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+    sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot.clk = (gpio_num_t)SD_PIN_SCK;
+    slot.cmd = (gpio_num_t)SD_PIN_MOSI;
+    slot.d0 = (gpio_num_t)SD_PIN_MISO;
+    slot.width = 1;
+    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    /* DAT3 idle-high: without it the card enters SPI mode and never answers
+     * the SDMMC controller. */
+    gpio_config_t dat3 = {
+        .pin_bit_mask = 1ULL << SD_PIN_CS,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
     };
-    esp_err_t err = spi_bus_initialize(host.slot, &bus, SDSPI_DEFAULT_DMA);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        snprintf(s_last_err, sizeof(s_last_err), "spi_bus %s", esp_err_to_name(err));
-        ESP_LOGW(kTag, "spi bus: %s", esp_err_to_name(err));
-        return false;
-    }
-    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.gpio_cs = (gpio_num_t)SD_PIN_CS;
-    slot.host_id = host.slot;
+    gpio_config(&dat3);
+    gpio_set_level((gpio_num_t)SD_PIN_CS, 1);
     esp_vfs_fat_mount_config_t config = {
         .format_if_mount_failed = false,
         .max_files = 6,

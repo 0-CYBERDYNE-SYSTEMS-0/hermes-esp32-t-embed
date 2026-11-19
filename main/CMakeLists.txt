@@ -59,7 +59,7 @@ if(IDF_TARGET STREQUAL "esp32s3")
                             "${target_dir}/t_embed_hermes_transport.cpp")
         list(APPEND private_dependencies esp_codec_dev esp_websocket_client heap
                                         mbedtls esp_event esp_netif esp_hw_support esp_system
-                                        fatfs sdmmc esp_driver_sdspi)
+                                        fatfs sdmmc esp_driver_sdmmc)
     endif()
 elseif(IDF_TARGET STREQUAL "esp32c5" OR IDF_TARGET STREQUAL "esp32c6" OR IDF_TARGET STREQUAL "esp32c61")
     set(receiver "families/c5_c6_c61/receiver.c")
