@@ -100,6 +100,10 @@ bool t_embed_sdlog_mount(void) {
     }
     s_last_mount_attempt_us = now;
 
+    /* Diagnose on the wire: the mount path logs which step fails, and the
+     * app runs with all logs silenced. Restore the silence afterwards. */
+    esp_log_level_set("*", ESP_LOG_INFO);
+
     /* The T-Embed TF slot is wired to the SDMMC controller in 1-bit mode
      * (LILYGO's own example: CLK 40, CMD 41, D0 38, DAT3 held high so the
      * card stays in SDMMC mode instead of falling back to SPI). */
@@ -136,6 +140,7 @@ bool t_embed_sdlog_mount(void) {
     }
     s_last_err[0] = '\0';
     s_mounted = true;
+    esp_log_level_set("*", ESP_LOG_NONE);
     if (!ensure_line_buffer()) {
         ESP_LOGW(kTag, "no line buffer; logging disabled");
     }
