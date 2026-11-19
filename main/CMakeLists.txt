@@ -90,7 +90,16 @@ idf_component_register(SRCS "${receiver}" ${sources}
     LDFRAGMENTS ${fragments}
     PRIV_INCLUDE_DIRS "common" "${target_dir}" "diagnostics"
     REQUIRES ${dependencies}
-    PRIV_REQUIRES ${private_dependencies})
+    PRIV_REQUIRES ${private_dependencies}
+    # Literal repetition on purpose: the component manager rewrites the
+    # requirements of this component from its own scan, and requirement names
+    # that only ever live in a variable appended inside a conditional block
+    # were dropped from the build in practice (fatfs/sdmmc/esp_driver_sdspi
+    # never reached the component graph).
+    fatfs sdmmc esp_driver_sdspi)
+
+message(STATUS "main requires=[${dependencies}]")
+message(STATUS "main priv requires=[${private_dependencies}]")
 
 if(ESP_SDR_T_EMBED_APPS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE ESP_SDR_T_EMBED_APPS=1)
