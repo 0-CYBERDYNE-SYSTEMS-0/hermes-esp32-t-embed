@@ -697,6 +697,9 @@ void app_main(void) {
      * bytes on the wire when a bench is diagnosing a dead slot. */
     esp_log_level_set("sdlog", ESP_LOG_INFO);
     esp_log_level_set("wifisniff", ESP_LOG_INFO);
+    esp_log_level_set("fatfs", ESP_LOG_INFO);
+    esp_log_level_set("sdspi", ESP_LOG_INFO);
+    esp_log_level_set("sdmmc", ESP_LOG_INFO);
 #endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
 #ifdef ESP_SDR_T_EMBED_APPS
