@@ -31,7 +31,7 @@ static volatile unsigned s_head;   /* producer */
 static volatile unsigned s_tail;   /* consumer */
 static volatile bool s_active;
 static FILE *s_file;
-static char s_path[96];
+static char s_path[160];
 static unsigned s_channel;
 static uint32_t s_seen, s_stored, s_dropped;
 static uint32_t s_mgmt, s_ctrl, s_data, s_misc;

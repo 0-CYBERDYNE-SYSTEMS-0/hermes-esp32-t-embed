@@ -337,11 +337,11 @@ bool t_embed_sdlog_write_iq(const uint8_t *iq, size_t bytes, unsigned samples,
 
     char clean[32];
     sanitize_label(label, clean, sizeof(clean));
-    char base[160];
-    snprintf(base, sizeof(base), "%s/%06lu-%04lu-%s", dir,
+    char base[224];
+    snprintf(base, sizeof(base), "%s/%06lu-%04lu-%.24s", dir,
              (unsigned long)((uptime_ms() / 1000) % 1000000u),
              (unsigned long)(s_iq_files + 1u), clean);
-    char path[192];
+    char path[256];
     snprintf(path, sizeof(path), "%s.sigmf-data", base);
     FILE *f = fopen(path, "wb");
     if (!f) return false;

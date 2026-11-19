@@ -36,11 +36,13 @@ static inline void sj_civil_from_days(int32_t days, int *year, unsigned *month,
     *year = (int)(y + (*month <= 2u));
 }
 
-/* ISO 8601 UTC with milliseconds: 2026-11-18T23:04:05.123Z */
+/* ISO 8601 UTC with milliseconds: 2026-11-18T23:04:05.123Z.
+ * Built in a fixed buffer first: the caller's cap is unknown at compile
+ * time and GCC -Werror=format-truncation would otherwise reject the write. */
 static inline size_t sj_iso8601(char *out, size_t cap, int64_t unix_ms) {
     if (!out || !cap) return 0;
     if (unix_ms <= 0) {
-        if (cap >= 1) out[0] = '\0';
+        out[0] = '\0';
         return 0;
     }
     int64_t seconds = unix_ms / 1000;
@@ -50,10 +52,19 @@ static inline size_t sj_iso8601(char *out, size_t cap, int64_t unix_ms) {
     int year;
     unsigned month, day;
     sj_civil_from_days((int32_t)days, &year, &month, &day);
-    int n = snprintf(out, cap, "%04d-%02u-%02uT%02u:%02u:%02u.%03uZ", year, month,
-                     day, (unsigned)(sod / 3600), (unsigned)(sod / 60 % 60),
-                     (unsigned)(sod % 60), (unsigned)(unix_ms % 1000));
-    return n > 0 ? (size_t)n : 0;
+    char fixed[40];
+    int n = snprintf(fixed, sizeof(fixed), "%04d-%02u-%02uT%02u:%02u:%02u.%03uZ",
+                     year, month, day,
+                     (unsigned)((sod / 3600) % 100u),
+                     (unsigned)((sod / 60) % 60u),
+                     (unsigned)(sod % 60u),
+                     (unsigned)(unix_ms % 1000u));
+    if (n <= 0 || (size_t)n >= sizeof(fixed) || (size_t)n >= cap) {
+        out[0] = '\0';
+        return 0;
+    }
+    memcpy(out, fixed, (size_t)n + 1u);
+    return (size_t)n;
 }
 
 /* Session directory name: 20261118-230405, or unsynced-<n> before a clock. */
@@ -75,10 +86,18 @@ static inline size_t sj_stamp(char *out, size_t cap, int64_t unix_ms,
     int year;
     unsigned month, day;
     sj_civil_from_days((int32_t)days, &year, &month, &day);
-    int n = snprintf(out, cap, "%04d%02u%02u-%02u%02u%02u", year, month, day,
-                     (unsigned)(sod / 3600), (unsigned)(sod / 60 % 60),
-                     (unsigned)(sod % 60));
-    return n > 0 ? (size_t)n : 0;
+    char fixed[24];
+    int n = snprintf(fixed, sizeof(fixed), "%04d%02u%02u-%02u%02u%02u", year,
+                     month, day,
+                     (unsigned)((sod / 3600) % 100u),
+                     (unsigned)((sod / 60) % 60u),
+                     (unsigned)(sod % 60u));
+    if (n <= 0 || (size_t)n >= sizeof(fixed) || (size_t)n >= cap) {
+        out[0] = '\0';
+        return 0;
+    }
+    memcpy(out, fixed, (size_t)n + 1u);
+    return (size_t)n;
 }
 
 typedef struct {
