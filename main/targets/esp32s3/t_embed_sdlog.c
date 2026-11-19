@@ -33,6 +33,7 @@ static const char *kTag = "sdlog";
 static sdmmc_card_t *s_card;
 static bool s_mounted;
 static int64_t s_last_mount_attempt_us;
+static char s_last_err[48] = "never attempted";
 
 static bool s_clock_synced;
 static int64_t s_clock_offset_ms; /* wall - uptime */
@@ -110,6 +111,7 @@ bool t_embed_sdlog_mount(void) {
     };
     esp_err_t err = spi_bus_initialize(host.slot, &bus, SDSPI_DEFAULT_DMA);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        snprintf(s_last_err, sizeof(s_last_err), "spi_bus %s", esp_err_to_name(err));
         ESP_LOGW(kTag, "spi bus: %s", esp_err_to_name(err));
         return false;
     }
@@ -123,9 +125,11 @@ bool t_embed_sdlog_mount(void) {
     };
     err = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot, &config, &s_card);
     if (err != ESP_OK) {
+        snprintf(s_last_err, sizeof(s_last_err), "mount %s", esp_err_to_name(err));
         ESP_LOGW(kTag, "no card: %s", esp_err_to_name(err));
         return false;
     }
+    s_last_err[0] = '\0';
     s_mounted = true;
     if (!ensure_line_buffer()) {
         ESP_LOGW(kTag, "no line buffer; logging disabled");
@@ -143,13 +147,15 @@ void t_embed_sdlog_status_json(char *out, size_t cap) {
     snprintf(out, cap,
              "{\"mounted\":%u,\"card_kb\":%llu,\"free_kb\":%llu,\"logging\":%u,"
              "\"session\":\"%s\",\"frames\":%lu,\"dropped\":%lu,\"events\":%lu,"
-             "\"iq_files\":%lu,\"clock_ms\":%lld,\"clock\":\"%s\",\"interval_ms\":%u}\n",
+             "\"iq_files\":%lu,\"clock_ms\":%lld,\"clock\":\"%s\",\"interval_ms\":%u,"
+             "\"last\":\"%s\"}\n",
              (unsigned)s_mounted, (unsigned long long)(total / 1024),
              (unsigned long long)(free_bytes / 1024), (unsigned)s_logging,
              s_logging ? s_session_stamp : "", (unsigned long)s_frames_written,
              (unsigned long)s_frames_dropped, (unsigned long)s_events_written,
              (unsigned long)s_iq_files, (long long)now_ms,
-             s_clock_synced ? "host" : "unsynced", s_min_interval_ms);
+             s_clock_synced ? "host" : "unsynced", s_min_interval_ms,
+             s_last_err);
 }
 
 static bool make_session_dir(void) {

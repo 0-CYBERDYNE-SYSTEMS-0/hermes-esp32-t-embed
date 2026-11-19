@@ -693,6 +693,10 @@ void app_main(void) {
     reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_SPIRAM);
     if (!reply_scratch)
         reply_scratch = (char *)heap_caps_malloc(REPLY_SCRATCH_CAP, MALLOC_CAP_8BIT);
+    /* The app silences all logs; card and sniffer diagnostics are worth their
+     * bytes on the wire when a bench is diagnosing a dead slot. */
+    esp_log_level_set("sdlog", ESP_LOG_INFO);
+    esp_log_level_set("wifisniff", ESP_LOG_INFO);
 #endif
 #if CONFIG_ESP_SDR_T_EMBED_UI
 #ifdef ESP_SDR_T_EMBED_APPS
