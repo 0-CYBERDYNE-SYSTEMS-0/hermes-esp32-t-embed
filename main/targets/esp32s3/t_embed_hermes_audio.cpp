@@ -216,7 +216,7 @@ struct TEmbedHermesAudio::Impl {
     }
 
     TaskHandle_t task = nullptr;
-    if (xTaskCreate(mic_task_entry, "t-embed-mic", 4096, this, 6, &task) != pdPASS) {
+    if (xTaskCreate(mic_task_entry, "t-embed-mic", 3072, this, 6, &task) != pdPASS) {
       vQueueDelete(mic_queue);
       mic_queue = nullptr;
       t_embed_audio_input_destroy(input);
@@ -269,7 +269,7 @@ struct TEmbedHermesAudio::Impl {
     if (result != ESP_OK) return speaker_status = result;
 
     TaskHandle_t task = nullptr;
-    if (xTaskCreate(speaker_task_entry, "t-embed-spk", 4096, this, 7, &task) != pdPASS)
+    if (xTaskCreate(speaker_task_entry, "t-embed-spk", 3072, this, 7, &task) != pdPASS)
       return speaker_status = ESP_ERR_NO_MEM;
     speaker_task.store(task);
     return speaker_status = ESP_OK;
