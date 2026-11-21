@@ -154,13 +154,26 @@ Ui::Ui(Display& display) : display_(display), panel_(display.info()), info_(pane
   layout_.header_h = Canvas::line_height(s + 1) + 4 * s;
   layout_.main_y = layout_.top_h;
   layout_.main_h = h - layout_.top_h - layout_.bottom_h;
-  int margin = 4 * s;
-  int content_h = h - layout_.top_h - layout_.header_h - layout_.bottom_h;
-  layout_.body_cols = cols_for(w - 2 * margin, s);
-  layout_.body_rows = std::max(1, (content_h - margin) / Canvas::line_height(s));
+  layout_.body_scale = s;
+  apply_body_layout();
 
   // Hero layout: the mascot is sized per screen (see hero_geom).
   layout_.hero_cols = cols_for(w - 4 * s, s);
+}
+
+void Ui::apply_body_layout() {
+  const int margin = 4 * layout_.scale;
+  const int content_h = info_.height - layout_.top_h - layout_.header_h - layout_.bottom_h;
+  layout_.body_cols = std::max(1, cols_for(info_.width - 2 * margin, layout_.body_scale));
+  layout_.body_rows = std::max(1, (content_h - margin) / Canvas::line_height(layout_.body_scale));
+}
+
+void Ui::set_text_size(int size) {
+  const int body = layout_.scale * std::max(1, std::min(3, size));
+  if (body == layout_.body_scale) return;
+  layout_.body_scale = body;
+  apply_body_layout();
+  valid_ = false;
 }
 
 void Ui::invalidate() { valid_ = false; }
@@ -409,6 +422,8 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     return;
   }
 
+  const int bs = layout_.body_scale;
+  const int blh = Canvas::line_height(bs);
   int rows = body_rows(m);
   if (!m.detail.empty()) {
     uint16_t dcol = m.screen == Screen::Error || m.screen == Screen::Offline ? kRed : kDim;
@@ -416,8 +431,8 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
     auto detail_lines = wrap_text(m.detail, layout_.body_cols);
     int shown = layout_.body_rows - rows;
     for (int i = 0; i < shown; ++i) {
-      c.text(margin, y, detail_lines[static_cast<size_t>(i)], s, dcol);
-      y += lh;
+      c.text(margin, y, detail_lines[static_cast<size_t>(i)], bs, dcol);
+      y += blh;
     }
   }
   if (m.body.empty() || rows <= 0) return;
@@ -428,11 +443,11 @@ void Ui::draw_content(Canvas& c, const UiModel& m) {
   int first = m.scroll < 0 ? max_first : std::min(m.scroll, max_first);
   uint16_t col = m.screen == Screen::Ready ? kDim : kText;
   for (int i = 0; i < rows && first + i < total; ++i) {
-    c.text(margin, y + i * lh, lines[static_cast<size_t>(first + i)], s, col);
+    c.text(margin, y + i * blh, lines[static_cast<size_t>(first + i)], bs, col);
   }
   if (total > rows) {
     // Scroll indicator along the right edge.
-    int track_y = y, track_h = rows * lh;
+    int track_y = y, track_h = rows * blh;
     int thumb_h = std::max(2 * s, track_h * rows / total);
     int thumb_y = track_y + (track_h - thumb_h) * first / std::max(1, max_first);
     c.fill_rect(w - 2 * s, track_y, s, track_h, kFaint);

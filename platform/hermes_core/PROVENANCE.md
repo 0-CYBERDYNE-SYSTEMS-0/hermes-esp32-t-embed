@@ -13,3 +13,6 @@ Hermes Agent mascot artwork, whose attribution is preserved in `NOTICE`.
 Local changes add a device-side voice-reply playback switch. Profiles with scroll
 controls retain reply text and manual scroll positions instead of automatically
 paging or hiding replies. Text still uses the upstream wrapping and renderer.
+
+A device-side reading text size (`App::set_text_size`, `Ui::set_text_size`, 1-3x) scales body and
+detail text only; the bars, header and hero screens keep their size. Default behaviour is unchanged.

@@ -143,7 +143,7 @@ int main() {
     b.handle_menu_input(r.app, click);
     assert(saved["volume"] == "80" && saved["voice_reply"] == "off");
     assert(!r.app.voice_replies_enabled());
-    assert(b.local_view_ == LocalView::ReplyAudio && b.selection_ == 2);
+    assert(b.local_view_ == LocalView::ReplyAudio && b.selection_ == 3);
     b.handle_menu_input(r.app, click);
     assert(b.local_view_ == LocalView::ActionMenu && b.selection_ == 5);
 
@@ -186,7 +186,7 @@ int main() {
 
     saved["voice_reply"] = "bad";
     b.load_voice_reply(r.app);
-    assert(!r.app.voice_replies_enabled() && b.selection_ == 2);
+    assert(!r.app.voice_replies_enabled() && b.selection_ == 3);
     b.render_local_view(r.app);
     assert(drawn_hint == "VOICE SETTING ERROR");
     read_error = ESP_ERR_INVALID_STATE;
@@ -200,6 +200,37 @@ int main() {
     b.load_voice_reply(r.app);
     assert(!r.app.voice_replies_enabled());
     open_error = 0;
+    // Text size cycles normal -> large -> x-large -> normal, persists, and survives reboot.
+    b.local_view_ = LocalView::ReplyAudio;
+    b.selection_ = 2;
+    assert(r.app.text_size() == 1);
+    b.handle_menu_input(r.app, click);
+    assert(r.app.text_size() == 2 && saved["text_size"] == "large");
+    assert(b.local_view_ == LocalView::ReplyAudio && b.reply_audio_notice_ == nullptr);
+    b.render_local_view(r.app);
+    assert(drawn_items.size() == 4 && drawn_items[2] == "TEXT SIZE: LARGE" && drawn_items[3] == "BACK");
+    b.handle_menu_input(r.app, click);
+    assert(r.app.text_size() == 3 && saved["text_size"] == "xlarge");
+    Rig again;
+    Board restored;
+    assert(restored.storage_.initialize());
+    restored.load_text_size(again.app);
+    assert(again.app.text_size() == 3);
+    b.handle_menu_input(r.app, click);
+    assert(r.app.text_size() == 1 && saved["text_size"] == "normal");
+    commit_error = ESP_ERR_INVALID_STATE;
+    b.handle_menu_input(r.app, click);
+    assert(r.app.text_size() == 2);  // applied for this session even if the save failed
+    b.render_local_view(r.app);
+    assert(drawn_hint == "SETTING NOT SAVED");
+    commit_error = 0;
+    saved["text_size"] = "garbage";
+    restored.load_text_size(again.app);
+    assert(again.app.text_size() == 1);
+    saved.erase("text_size");
+    restored.load_text_size(again.app);
+    assert(again.app.text_size() == 1);
+
     init_error = ESP_ERR_INVALID_STATE;
     Board unavailable;
     assert(!unavailable.storage_.initialize());

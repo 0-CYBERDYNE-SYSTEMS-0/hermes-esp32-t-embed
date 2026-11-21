@@ -89,6 +89,12 @@ void App::set_voice_replies_enabled(bool enabled) {
   update_model();
 }
 
+void App::set_text_size(int size) {
+  text_size_ = std::max(1, std::min(3, size));
+  if (ui_) ui_->set_text_size(text_size_);
+  update_model();
+}
+
 void App::log(LogLevel level, std::string_view msg) {
   if (hal_.system) hal_.system->log(level, msg);
 }
@@ -182,7 +188,10 @@ void App::begin() {
     add_action(std::move(bl));
   }
 
-  if (hal_.display) ui_ = std::make_unique<Ui>(*hal_.display);
+  if (hal_.display) {
+    ui_ = std::make_unique<Ui>(*hal_.display);
+    ui_->set_text_size(text_size_);
+  }
   phase_ = Phase::Boot;
   phase_since_ = now();
   boot_until_ = now() + kBootScreenMs;
