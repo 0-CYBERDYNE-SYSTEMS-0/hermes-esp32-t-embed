@@ -15,6 +15,7 @@
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "t_embed_audio_input.h"
+#include "t_embed_speaker_queue.h"
 
 namespace {
 
@@ -22,9 +23,17 @@ constexpr uint32_t kSampleRate = 16000;
 constexpr size_t kMicReadFrames = 80;
 constexpr size_t kMicChunkSamples = 320;
 constexpr UBaseType_t kMicQueueDepth = 4;
-constexpr size_t kSpeakerBufferBytes = 48000;
+// About 4 s of 16 kHz PCM16 in PSRAM. The gateway sends at most 0.5 s ahead of real
+// time, so this only absorbs stalls on this side; a stall delays playback instead of
+// dropping the rest of the reply.
+constexpr size_t kSpeakerBufferBytes = 131072;
+// I2S DMA ring: 6 x 240 frames (~90 ms), the ESP-IDF default, so a brief scheduler
+// stall does not run the amplifier dry.
+constexpr uint32_t kSpeakerDmaDescriptors = 6;
 constexpr size_t kSpeakerChunkSamples = 160;
-constexpr int64_t kSpeakerDmaTailUs = 20000;
+constexpr uint32_t kSpeakerDmaFrames = 240;
+// The DMA ring (6 x 240 frames at 16 kHz = 90 ms) still holds audio after the last write.
+constexpr int64_t kSpeakerDmaTailUs = 100000;
 constexpr uint32_t kSpeakerAbortWaitMs = 100;
 constexpr char kTag[] = "t_embed_audio";
 
@@ -60,6 +69,8 @@ struct TEmbedHermesAudio::Impl {
   uint8_t* speaker_storage = nullptr;
   SemaphoreHandle_t speaker_lock = nullptr;
   int64_t speaker_tail_until_us = 0;
+  uint32_t speaker_dropped_bytes = 0;  // written only by the app task
+  uint32_t speaker_stream_bytes = 0;   // queued for the current reply stream
   bool initialized = false;
 
   static void mic_task_entry(void* arg) {
@@ -216,7 +227,7 @@ struct TEmbedHermesAudio::Impl {
     }
 
     TaskHandle_t task = nullptr;
-    if (xTaskCreate(mic_task_entry, "t-embed-mic", 3072, this, 6, &task) != pdPASS) {
+    if (xTaskCreate(mic_task_entry, "t-embed-mic", 4096, this, 6, &task) != pdPASS) {
       vQueueDelete(mic_queue);
       mic_queue = nullptr;
       t_embed_audio_input_destroy(input);
@@ -228,8 +239,9 @@ struct TEmbedHermesAudio::Impl {
   }
 
   esp_err_t initialize_speaker() {
+    // xStreamBufferCreateStatic needs xBufferSizeBytes + 1 bytes of storage.
     speaker_storage = static_cast<uint8_t*>(heap_caps_malloc(
-        kSpeakerBufferBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        kSpeakerBufferBytes + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!speaker_storage) return speaker_status = ESP_ERR_NO_MEM;
     speaker_buffer = xStreamBufferCreateStatic(
         kSpeakerBufferBytes, 1, speaker_storage, &speaker_stream_control);
@@ -250,8 +262,8 @@ struct TEmbedHermesAudio::Impl {
     i2s_chan_config_t channel_config =
         I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     channel_config.auto_clear = true;
-    channel_config.dma_desc_num = 2;
-    channel_config.dma_frame_num = kSpeakerChunkSamples;
+    channel_config.dma_desc_num = kSpeakerDmaDescriptors;
+    channel_config.dma_frame_num = kSpeakerDmaFrames;
     esp_err_t result = i2s_new_channel(&channel_config, &speaker_channel, NULL);
     if (result != ESP_OK) return speaker_status = result;
 
@@ -269,7 +281,7 @@ struct TEmbedHermesAudio::Impl {
     if (result != ESP_OK) return speaker_status = result;
 
     TaskHandle_t task = nullptr;
-    if (xTaskCreate(speaker_task_entry, "t-embed-spk", 3072, this, 7, &task) != pdPASS)
+    if (xTaskCreate(speaker_task_entry, "t-embed-spk", 4096, this, 7, &task) != pdPASS)
       return speaker_status = ESP_ERR_NO_MEM;
     speaker_task.store(task);
     return speaker_status = ESP_OK;
@@ -418,6 +430,8 @@ bool TEmbedHermesAudio::begin(uint32_t sample_rate) {
   if (impl_->speaker_abort_generation.load() != generation) return false;
   impl_->speaker_draining.store(false);
   impl_->speaker_open.store(true);
+  impl_->speaker_stream_bytes = 0;
+  ESP_LOGI(kTag, "reply audio start");
   return true;
 }
 
@@ -426,20 +440,43 @@ void TEmbedHermesAudio::write(const int16_t* samples, size_t count) {
       count == 0 || count > std::numeric_limits<size_t>::max() / sizeof(int16_t))
     return;
   size_t bytes = count * sizeof(int16_t);
-  size_t sent = xStreamBufferSend(impl_->speaker_buffer, samples, bytes, 0);
-  if (sent < bytes)
+  // Only whole samples go in: see t_embed_speaker_queue.h.
+  size_t fit = t_embed_whole_sample_bytes(bytes, xStreamBufferSpacesAvailable(impl_->speaker_buffer));
+  size_t sent = fit ? xStreamBufferSend(impl_->speaker_buffer, samples, fit, 0) : 0;
+  impl_->speaker_stream_bytes += static_cast<uint32_t>(sent);
+  if (sent < bytes) {
+    impl_->speaker_dropped_bytes += bytes - sent;
     ESP_LOGW(kTag, "speaker queue full; dropped %u bytes",
              static_cast<unsigned>(bytes - sent));
+  }
 }
 
 void TEmbedHermesAudio::end() {
   if (!impl_) return;
+  ESP_LOGI(kTag, "reply audio end: %u ms queued, %u ms still buffered",
+           static_cast<unsigned>(impl_->speaker_stream_bytes / 32u),
+           impl_->speaker_buffer
+               ? static_cast<unsigned>(xStreamBufferBytesAvailable(impl_->speaker_buffer) / 32u) : 0u);
+  if (impl_->speaker_dropped_bytes) {
+    ESP_LOGW(kTag, "reply audio ended; %u bytes were dropped (queue full)",
+             static_cast<unsigned>(impl_->speaker_dropped_bytes));
+    impl_->speaker_dropped_bytes = 0;
+  }
   impl_->speaker_open.store(false);
   impl_->speaker_draining.store(true);
 }
 
 void TEmbedHermesAudio::abort() {
-  if (impl_ && impl_->speaker_status == ESP_OK) impl_->abort_speaker();
+  if (impl_ && impl_->speaker_status == ESP_OK) {
+    const bool live = impl_->speaker_open.load() || impl_->speaker_draining.load() ||
+                      xStreamBufferBytesAvailable(impl_->speaker_buffer) > 0;
+    if (live)
+      ESP_LOGW(kTag, "reply audio aborted: %u ms queued, %u ms not yet played, open=%d",
+               static_cast<unsigned>(impl_->speaker_stream_bytes / 32u),
+               static_cast<unsigned>(xStreamBufferBytesAvailable(impl_->speaker_buffer) / 32u),
+               impl_->speaker_open.load() ? 1 : 0);
+    impl_->abort_speaker();
+  }
 }
 
 bool TEmbedHermesAudio::busy() const {

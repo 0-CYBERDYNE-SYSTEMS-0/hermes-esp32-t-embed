@@ -152,3 +152,12 @@ IDF_COMPONENT_MANAGER=1 python3 "$IDF_PATH/tools/idf.py" \
 ```
 
 Hardware validation confirmed Wi-Fi connection, gateway pairing, and a fast voice conversation on the board. Prompt handling and repeated app transitions have not been comprehensively tested; a successful compile alone does not verify those behaviors.
+
+## Spoken replies stop after about 10 seconds
+
+If a long spoken answer plays for roughly 10 seconds and stops, while the text still arrives, the
+cutoff is on the gateway: it gives its streaming-TTS synthesiser a fixed 10 s to finish once the
+answer text is complete, then cancels the audio stream. The board's serial log shows it as
+`rx audio.abort` shortly before `rx reply`. A slow local TTS model needs a longer wait. Stock gateways
+hard-code 10 s; the gateway used while developing this firmware was patched to read
+`tts.streaming.finalize_timeout_s`. See `docs/HERMES-INTERNAL-RAM-VALIDATION.md`.

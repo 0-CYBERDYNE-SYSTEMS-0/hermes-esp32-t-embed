@@ -1,4 +1,4 @@
-# Hermes internal-RAM validation
+# Hermes internal-RAM and spoken-reply validation
 
 Date: 2026-11-21. Board: LILYGO T-Embed ESP32-S3R8 on the bench, USB serial. ESP-IDF `25fe69f946`.
 
@@ -73,3 +73,32 @@ this change; their source was not investigated.
 - Push-to-talk and speaker playback with the 3072-byte audio stacks were not exercised by the
   tester. Raise the stacks if a crash appears.
 - Free internal RAM with Hermes connected was 63.9 KB; margin before the change was 4.6 KB.
+
+## Spoken replies (2026-11-21, same board)
+
+After the RAM fix, speech played for a few seconds, turned to static, and cut off. Four separate
+causes, found from the board's serial log and the gateway log:
+
+1. **Static.** `write()` queued whatever fit in the FreeRTOS stream buffer. A stream buffer keeps
+   one byte free, so its room is odd; a partial write split a 16-bit sample and shifted every later
+   byte. Fix: only whole samples are queued (`t_embed_speaker_queue.h`, host-tested).
+2. **Memory overrun.** The static stream buffer was given `size` bytes of storage; FreeRTOS needs
+   `size + 1`. Fixed, and the buffer is now ~4 s (128 KiB, PSRAM).
+3. **Underruns.** The I2S DMA ring was 2 x 160 frames (20 ms). It is now 6 x 240 (90 ms), and the
+   drain tail after the last write was lengthened to match.
+4. **First press after boot sent nothing.** The transport send queue held one message and kept it
+   there while it was being sent, so a mic frame in flight swallowed the next `audio.start`.
+   The queue is now 8 deep, and a dropped send is logged with its reason.
+
+The remaining cutoff was **not** in the firmware. The board's log showed `rx audio.abort` from the
+gateway 10.1 to 10.4 s after every `rx audio.start`, immediately before the final `rx reply`. The
+Hermes gateway waits a fixed 10 s for its streaming-TTS synthesiser to finish once the text is done
+(`gateway/run_turn.py`, `wait_complete(timeout=10.0)`), then cancels the stream and never replays
+it. A local speech model that needs longer than that for a long answer is cut off, with the rest
+unspoken. The wait is now read from `tts.streaming.finalize_timeout_s` (default 10, set to 120 for
+this setup). That change is in the gateway install, not in this repository, and a gateway update
+may overwrite it. After the change and a gateway restart, long answers played through.
+
+Turning streaming off (`tts.streaming.provider: none`) is not a workaround here: the local model
+then fails on one large request ("peer closed connection... incomplete chunked read") and nothing
+is spoken.

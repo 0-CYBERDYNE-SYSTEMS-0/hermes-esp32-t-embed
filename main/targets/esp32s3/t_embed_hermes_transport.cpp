@@ -17,7 +17,10 @@ constexpr size_t kMaxSendBytes = HermesTransport::kMaxMessageBytes;
 // Limit internal fallback to 4 KiB per event; the inbound event queue plus one polled event stays under 36 KiB.
 constexpr size_t kMaxInternalMessageBytes = 4096;
 constexpr size_t kCommandQueueDepth = 1;
-constexpr size_t kSendQueueDepth = 1;
+// The worker leaves the message it is sending in the queue until the send completes, so a
+// depth of 1 made every send fail while another was in flight (a mic frame in progress
+// swallowed the next audio.start). Pointers only; payloads are copied into PSRAM.
+constexpr size_t kSendQueueDepth = 8;
 constexpr uint32_t kWorkerStackSize = 6144;
 
 void *allocate_message_buffer(size_t len) {
@@ -154,7 +157,11 @@ void HermesTransport::connect(const std::string &url, const std::string &subprot
 }
 
 bool HermesTransport::send_text(std::string_view text) {
-    if (!owner_connected_ || text.size() > kMaxSendBytes || !send_queue_) return false;
+    if (!owner_connected_ || text.size() > kMaxSendBytes || !send_queue_) {
+        ESP_LOGW(kTag, "text send rejected: connected=%d size=%u", owner_connected_ ? 1 : 0,
+                 static_cast<unsigned>(text.size()));
+        return false;
+    }
 
     uint8_t *copy = nullptr;
     if (!text.empty()) {
@@ -278,6 +285,12 @@ bool HermesTransport::enqueue_control(const ControlCommand &command) {
 
 bool HermesTransport::enqueue_send(const SendCommand &command) {
     if (!send_queue_ || !worker_task_ || xQueueSend(send_queue_, &command, 0) != pdTRUE) {
+        // Binary mic frames arrive every 20 ms; log one in 25 to keep the console usable.
+        static uint32_t failures = 0;
+        if (command.type == SendType::Text || (failures++ % 25u) == 0)
+            ESP_LOGW(kTag, "send queue full; dropped a %s message (%u bytes)",
+                     command.type == SendType::Text ? "text" : "binary",
+                     static_cast<unsigned>(command.len));
         heap_caps_free(command.data);
         return false;
     }
