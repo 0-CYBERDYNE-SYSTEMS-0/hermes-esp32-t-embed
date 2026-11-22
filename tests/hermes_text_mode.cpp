@@ -155,6 +155,16 @@ void wrapping() {
     Rig r;
     hg::Ui ui(r.fake);
     assert(ui.layout().body_cols == 52 && ui.layout().body_rows == 13);
+    // Reading text size scales body text only; the bars keep their size.
+    const int bar_h = ui.layout().top_h;
+    ui.set_text_size(2);
+    assert(ui.layout().body_cols == 26 && ui.layout().body_rows == 6 && ui.layout().top_h == bar_h);
+    ui.set_text_size(3);
+    assert(ui.layout().body_cols == 17 && ui.layout().body_rows == 4);
+    ui.set_text_size(99);  // clamped
+    assert(ui.layout().body_cols == 17);
+    ui.set_text_size(1);
+    assert(ui.layout().body_cols == 52 && ui.layout().body_rows == 13);
     const std::string text = "An answer that wraps at word boundaries.\n\n" + std::string(120, 'x');
     const auto lines = hg::wrap_text(text, ui.layout().body_cols);
     assert(lines.size() == 5 && lines[1].empty());

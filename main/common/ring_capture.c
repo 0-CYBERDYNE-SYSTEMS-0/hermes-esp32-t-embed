@@ -240,7 +240,11 @@ RING_HOT static uint32_t find_end(unsigned b, unsigned origin, unsigned write_in
 #else
 #define TXQ_SIZE 16384u /* 7 frames of 2048 bins, 56 of 256 */
 #endif
+#if CONFIG_IDF_TARGET_ESP32S3
+static uint8_t *txq; /* internal heap (ring_capture_init): BSS must end below the RF ring */
+#else
 static uint8_t txq[TXQ_SIZE];
+#endif
 static uint32_t txq_head, txq_tail; /* free-running byte counters */
 _Static_assert((TXQ_SIZE & (TXQ_SIZE - 1u)) == 0, "queue size");
 
@@ -295,23 +299,34 @@ typedef struct __attribute__((packed)) {
 } spec_header_t;
 _Static_assert(sizeof(spec_header_t) == 28, "SPEC header layout");
 
-static int16_t window_q15[RING_SPEC_NFFT_MAX];
 #if CONFIG_IDF_TARGET_ESP32S3
+/* The S3 SPEC working buffers live in the internal heap, allocated once by
+ * ring_capture_init(), so the Hermes and microphone apps in the same image do not
+ * pay ~60 KB of static internal RAM for the SDR. They stay internal SRAM: the two
+ * cores hand data over without a data cache, so they must not be PSRAM. */
+#define ACCUM_BUFS 2u /* double buffer: core 1 encodes one while filling the other */
+static int16_t *window_q15;
 /* Window with each coefficient twice (I and Q lanes) for the PIE unpack. */
-static int16_t win2[2 * RING_SPEC_NFFT_MAX] __attribute__((aligned(16)));
+static int16_t *win2;
 void s3_unpack_iq10_win(const uint32_t *src, int16_t *dst, const int16_t *win2, unsigned groups8);
-#endif
+static int16_t *fft_buf;
+static float (*accum_buf)[RING_SPEC_NFFT_MAX];
+static float *accum;
+static uint16_t *bin_of; /* FFT output slot -> natural-order bin */
+static uint8_t *frame_out;
+static bool bufs_ok;
+#else
+#define ACCUM_BUFS 1u
+static int16_t window_q15[RING_SPEC_NFFT_MAX];
 static int16_t fft_buf[2 * RING_SPEC_NFFT_MAX] __attribute__((aligned(16)));
 /* Indexed by FFT output slot (bit-reversed order); emit maps slot -> bin.
  * mean: float power sum; max-hold: uint32 power per FFT slot (same storage). */
-#if CONFIG_IDF_TARGET_ESP32S3
-static float accum_buf[2][RING_SPEC_NFFT_MAX]; /* double buffer: core 1 encodes one while filling the other */
-#else
 static float accum_buf[1][RING_SPEC_NFFT_MAX];
-#endif
 static float *accum = accum_buf[0];
 static uint16_t bin_of[RING_SPEC_NFFT_MAX]; /* FFT output slot -> natural-order bin */
 static uint8_t frame_out[sizeof(spec_header_t) + RING_SPEC_NFFT_MAX + 4];
+#endif
+#define ACCUM_BYTES (ACCUM_BUFS * RING_SPEC_NFFT_MAX * sizeof(float))
 /* A single latest-frame mailbox keeps the DSP path independent of SPI/UI
  * work. The app reads it after ring_capture_run restores interrupts. */
 static volatile unsigned local_spectrum_n;
@@ -329,7 +344,27 @@ void ring_capture_init(void) {
     dsp_ready = spectrum_fft_init();
     log_tables_init();
 #else
-    /* twiddles from the heap: BSS must end below the RF ring (sram_guard.ld) */
+    /* working buffers and twiddles from the heap: BSS must end below the RF ring (sram_guard.ld) */
+    if (!bufs_ok) {
+        const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+        window_q15 = heap_caps_aligned_alloc(16, RING_SPEC_NFFT_MAX * sizeof(int16_t), caps);
+        win2 = heap_caps_aligned_alloc(16, 2 * RING_SPEC_NFFT_MAX * sizeof(int16_t), caps);
+        fft_buf = heap_caps_aligned_alloc(16, 2 * RING_SPEC_NFFT_MAX * sizeof(int16_t), caps);
+        accum_buf = heap_caps_aligned_alloc(16, ACCUM_BYTES, caps);
+        bin_of = heap_caps_aligned_alloc(16, RING_SPEC_NFFT_MAX * sizeof(uint16_t), caps);
+        frame_out = heap_caps_aligned_alloc(16, sizeof(spec_header_t) + RING_SPEC_NFFT_MAX + 4, caps);
+        txq = heap_caps_aligned_alloc(16, TXQ_SIZE, caps);
+        bufs_ok = window_q15 && win2 && fft_buf && accum_buf && bin_of && frame_out && txq;
+        if (!bufs_ok) return; /* every run fails with RING_FAIL_ARG */
+        memset(window_q15, 0, RING_SPEC_NFFT_MAX * sizeof(int16_t));
+        memset(win2, 0, 2 * RING_SPEC_NFFT_MAX * sizeof(int16_t));
+        memset(fft_buf, 0, 2 * RING_SPEC_NFFT_MAX * sizeof(int16_t));
+        memset(accum_buf, 0, ACCUM_BYTES);
+        memset(bin_of, 0, RING_SPEC_NFFT_MAX * sizeof(uint16_t));
+        memset(frame_out, 0, sizeof(spec_header_t) + RING_SPEC_NFFT_MAX + 4);
+        memset(txq, 0, TXQ_SIZE);
+        accum = accum_buf[0];
+    }
     static int16_t *twiddles;
     if(!twiddles)twiddles=heap_caps_aligned_alloc(16,RING_SPEC_NFFT_MAX*sizeof(int16_t),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     dsp_ready = twiddles && dsps_fft2r_init_sc16(twiddles,RING_SPEC_NFFT_MAX)==ESP_OK;
@@ -1061,9 +1096,16 @@ static inline void c1_revoke(unsigned b) {
     }
 }
 
+extern uint32_t s3_core1_sp; /* top of core 1's stack, read by s3_core1_entry */
+#define C1_STACK_BYTES 8192u
+
 static void c1_start(void) {
     hbuf = heap_caps_aligned_alloc(16, 2 * RING_SPEC_NFFT_MAX * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!hbuf) return; /* no second core: single-core SPEC */
+    uint8_t *stack = heap_caps_aligned_alloc(16, C1_STACK_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!stack) return;
+    s3_core1_sp = (uint32_t)stack + C1_STACK_BYTES;
+    MEMW();
     cpu_utility_ll_unstall_cpu(1);
     cpu_utility_ll_enable_clock_and_reset_app_cpu();
     ets_set_appcpu_boot_addr((uint32_t)s3_core1_entry);
@@ -1150,6 +1192,12 @@ RING_HOT void ring_capture_run(const ring_config_t *cfg, ring_result_t *r) {
     txq_head = txq_tail = 0;
     const bool spec = cfg->mode == RING_MODE_SPEC;
     const bool capture = cfg->mode == RING_MODE_CAPTURE;
+#if CONFIG_IDF_TARGET_ESP32S3
+    if (!bufs_ok) {
+        fail(r, RING_FAIL_ARG, 0);
+        return;
+    }
+#endif
     if ((!ring_capture_rate_hz(cfg->rate)) ||
         (capture && (cfg->capture_units < 1 || cfg->capture_units > RING_BANKS)) ||
         (spec && (!dsp_ready || !ring_capture_valid_nfft(cfg->nfft) || !cfg->stride || !cfg->units_per_frame))) {
@@ -1161,7 +1209,7 @@ RING_HOT void ring_capture_run(const ring_config_t *cfg, ring_result_t *r) {
 #if !CONFIG_IDF_TARGET_ESP32S3
     spectrum_stats_init(&scalar_stats);
 #endif
-    memset(accum_buf, 0, sizeof(accum_buf));
+    memset(accum_buf, 0, ACCUM_BYTES);
     accum = accum_buf[0];
 #if CONFIG_IDF_TARGET_ESP32S3
     c1enc.pending = 0;
@@ -1197,7 +1245,7 @@ RING_HOT void ring_capture_run(const ring_config_t *cfg, ring_result_t *r) {
         spec_accumulate(false, 0, CHUNK < spec_n ? CHUNK : spec_n);
         uint32_t elapsed = esp_cpu_get_cycle_count() - start;
         if (elapsed > longest) longest = elapsed;
-        memset(accum_buf, 0, sizeof(accum_buf));
+        memset(accum_buf, 0, ACCUM_BYTES);
         accum = accum_buf[0];
         c1enc.pending = 0;
         /* Seed the slice budget with the longest processing stage of this size, so the

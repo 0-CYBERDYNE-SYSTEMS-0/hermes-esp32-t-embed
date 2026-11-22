@@ -482,6 +482,7 @@ public:
                   .set("internal_largest", static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)))
                   .set("psram_free", static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
         };
+        load_text_size(app);
         load_voice_reply(app);
         app.begin();
         transport_.set_text_observer(&HermesRunner::observe_text, this);
@@ -763,13 +764,22 @@ private:
         if (!valid) {
             reply_audio_notice_ = "VOICE SETTING ERROR";
             local_view_ = LocalView::ReplyAudio;
-            selection_ = 2u;
+            selection_ = 3u;
         }
+    }
+
+    // Reading text size: "normal", "large" or "xlarge" in NVS; anything else is normal.
+    void load_text_size(hg::App &app) {
+        auto value = storage_.get("text_size");
+        int size = 1;
+        if (value && *value == "large") size = 2;
+        else if (value && *value == "xlarge") size = 3;
+        app.set_text_size(size);
     }
 
     void handle_menu_input(hg::App &app, const t_embed_input_event_t &input) {
         if (local_view_ == LocalView::ReplyAudio) {
-            selection_ = t_embed_menu_move(selection_, input.detents, 3u);
+            selection_ = t_embed_menu_move(selection_, input.detents, 4u);
             if (input.short_click && input.press_context == T_EMBED_INPUT_HERMES_MENU) {
                 if (selection_ == 0u) {
                     app.set_voice_replies_enabled(!app.voice_replies_enabled());
@@ -785,6 +795,12 @@ private:
                     volume_draft_ = read_volume();
                     std::snprintf(volume_label_, sizeof(volume_label_), "VOLUME %u PCT", volume_draft_);
                     local_view_ = LocalView::Volume;
+                } else if (selection_ == 2u) {
+                    int next = app.text_size() % 3 + 1;
+                    app.set_text_size(next);
+                    storage_.set("text_size", next == 3 ? "xlarge" : next == 2 ? "large" : "normal");
+                    reply_audio_notice_ = storage_.last_error() == ESP_OK ? nullptr : "SETTING NOT SAVED";
+                    t_embed_ui_invalidate_overlays();
                 } else {
                     open_action_menu(app);
                 }
@@ -821,7 +837,7 @@ private:
                 std::snprintf(command, sizeof(command), "set volume %u", volume_draft_);
                 (void)app.console(command);
                 local_view_ = LocalView::ReplyAudio;
-                selection_ = 2u;
+                selection_ = 3u;
             }
             return;
         }
@@ -913,8 +929,8 @@ private:
                 prompt_selection_, outcome);
         } else if (local_view_ == LocalView::ActionMenu) {
             static const char *const active_items[] = {
-                "CANCEL TURN", "NEW CONVERSATION", "REPLY AUDIO", "WI-FI NETWORK", "HOME", "BACK"};
-            static const char *const offline_items[] = {"HOME", "WI-FI NETWORK", "REPLY AUDIO", "BACK"};
+                "CANCEL TURN", "NEW CONVERSATION", "REPLY SETTINGS", "WI-FI NETWORK", "HOME", "BACK"};
+            static const char *const offline_items[] = {"HOME", "WI-FI NETWORK", "REPLY SETTINGS", "BACK"};
             if (app.online() && app.paired()) {
                 t_embed_ui_render_menu_overlay("HERMES MENU", active_items, 6u,
                     selection_, "TURN SELECT PRESS OPEN");
@@ -923,10 +939,15 @@ private:
                     selection_ % 4u, "TURN SELECT PRESS OPEN");
             }
         } else if (local_view_ == LocalView::ReplyAudio) {
-            static const char *const on_items[] = {"VOICE REPLIES: ON", "VOLUME", "BACK"};
-            static const char *const off_items[] = {"VOICE REPLIES: OFF", "VOLUME", "BACK"};
-            t_embed_ui_render_menu_overlay("REPLY AUDIO",
-                app.voice_replies_enabled() ? on_items : off_items, 3u, selection_,
+            static const char *const items[2][3][4] = {
+                {{"VOICE REPLIES: OFF", "VOLUME", "TEXT SIZE: NORMAL", "BACK"},
+                 {"VOICE REPLIES: OFF", "VOLUME", "TEXT SIZE: LARGE", "BACK"},
+                 {"VOICE REPLIES: OFF", "VOLUME", "TEXT SIZE: X-LARGE", "BACK"}},
+                {{"VOICE REPLIES: ON", "VOLUME", "TEXT SIZE: NORMAL", "BACK"},
+                 {"VOICE REPLIES: ON", "VOLUME", "TEXT SIZE: LARGE", "BACK"},
+                 {"VOICE REPLIES: ON", "VOLUME", "TEXT SIZE: X-LARGE", "BACK"}}};
+            t_embed_ui_render_menu_overlay("REPLY SETTINGS",
+                items[app.voice_replies_enabled() ? 1 : 0][app.text_size() - 1], 4u, selection_,
                 reply_audio_notice_ ? reply_audio_notice_ : "TURN SELECT PRESS CHANGE");
         } else if (local_view_ == LocalView::WifiNetwork) {
             const char *const items[] = {"AUTO (HOME FIRST)", "HOME WI-FI",

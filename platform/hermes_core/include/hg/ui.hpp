@@ -57,7 +57,8 @@ struct UiModel {
 };
 
 struct UiLayout {
-  int scale = 1;  // base text scale
+  int scale = 1;  // base text scale (bars, header, hero)
+  int body_scale = 1;  // reading text scale: `scale` times the user's text size
   int top_h = 0, header_h = 0, bottom_h = 0;
   int body_cols = 0, body_rows = 0;
   int main_y = 0, main_h = 0;  // area between the bars (used for images)
@@ -79,10 +80,14 @@ class Ui {
   // A canvas over that area, and a flush of its rows [y0, y1).
   Canvas canvas();
   void flush(int y0, int y1);
+  // Reading-text size multiplier (1..3) for body and detail lines. Bars, header and
+  // hero screens keep the base scale. Changes body_cols/body_rows.
+  void set_text_size(int size);
   // Body text rows visible on a text screen for this model (after detail lines).
   int body_rows(const UiModel& m) const;
 
  private:
+  void apply_body_layout();
   void draw_top(Canvas& c, const UiModel& m);
   void draw_header(Canvas& c, const UiModel& m);
   void draw_content(Canvas& c, const UiModel& m);

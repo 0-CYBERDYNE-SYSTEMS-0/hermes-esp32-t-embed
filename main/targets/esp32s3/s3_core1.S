@@ -5,7 +5,7 @@
  *
  * Core 1 runs with all interrupts masked (PS.INTLEVEL 15), windowed ABI with
  * window-overflow exceptions through IDF's vector table, FPU (CP0) and PIE
- * (CP3) enabled, and its own 8 KiB stack. It never returns. Setup sequence
+ * (CP3) enabled, and its own 8 KiB stack (internal heap, see c1_start()). It never returns. Setup sequence
  * after h0m3us3r/eSpDR startup.S (0BSD).
  */
     .section .iram1.s3_core1, "ax"
@@ -26,7 +26,8 @@ s3_core1_entry:
     movi    a2, 0x4002f             /* WOE, UM, INTLEVEL 15 */
     wsr     a2, ps
     rsync
-    movi    a1, s3_core1_stack_top
+    movi    a2, s3_core1_sp
+    l32i    a1, a2, 0               /* heap stack top, set by c1_start() */
     mov     a2, a1
     addi    a1, a1, -32
     s32e    a2, a1, -12
@@ -35,10 +36,8 @@ s3_core1_entry:
 1:  j       1b
     .size   s3_core1_entry, . - s3_core1_entry
 
-    .section .bss.s3_core1_stack, "aw", @nobits
-    .align  16
-    .global s3_core1_stack
-s3_core1_stack:
-    .space  8192
-    .global s3_core1_stack_top
-s3_core1_stack_top:
+    .section .bss.s3_core1_sp, "aw", @nobits
+    .align  4
+    .global s3_core1_sp
+s3_core1_sp:
+    .space  4

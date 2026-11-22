@@ -71,6 +71,9 @@ class App {
   // Local output preference; does not change microphone input or gateway state.
   void set_voice_replies_enabled(bool enabled);
   bool voice_replies_enabled() const { return voice_replies_enabled_; }
+  // Local reading-text size, 1 (normal) to 3 (extra large). May be set before begin().
+  void set_text_size(int size);
+  int text_size() const { return text_size_; }
 
   // --- events from the port -------------------------------------------------
   void on_network(bool up, std::string_view detail = {});
@@ -208,6 +211,7 @@ class App {
   TalkMode talk_mode_ = TalkMode::Hold;
   uint8_t volume_ = 70;
   bool voice_replies_enabled_ = true;
+  int text_size_ = 1;
 
   // connection
   Phase phase_ = Phase::Boot;
